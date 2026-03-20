@@ -81,14 +81,14 @@ pnpm --filter @vluna/vluna-core vlunactl --help
 Commands:
 - Create a realm (baseline provisioning):
   ```bash
-  pnpm --filter @vluna/vluna-core vlunactl realm create --realm-id demo-realm-1 --name "Demo Realm"
+  pnpm --filter @vluna/vluna-core vlunactl realm create --realm-id realm-default --name "Default Realm"
   ```
   If `--realm-id` is omitted, `vlunactl` generates `realm-<10-char random>`.
   Optional: attach realm metadata:
   ```bash
   pnpm --filter @vluna/vluna-core vlunactl realm create \
-    --realm-id demo-realm-1 \
-    --name "Demo Realm" \
+    --realm-id realm-default \
+    --name "Default Realm" \
     --metadata-json '{
       "auth": {
         "issuers": [
@@ -115,15 +115,15 @@ Commands:
   ```
 - Create a service API key for a realm (prints `keyId` + base64 secret):
   ```bash
-  pnpm --filter @vluna/vluna-core vlunactl service-key create --realm-id demo-realm-1
+  pnpm --filter @vluna/vluna-core vlunactl service-key create --realm-id realm-default
   ```
   Optional expiration (ISO 8601):
   ```bash
-  pnpm --filter @vluna/vluna-core vlunactl service-key create --realm-id demo-realm-1 --expires-at 2026-06-30T00:00:00Z
+  pnpm --filter @vluna/vluna-core vlunactl service-key create --realm-id realm-default --expires-at 2026-06-30T00:00:00Z
   ```
 - Get the derived secret for an existing key (validates realm authorization):
   ```bash
-  pnpm --filter @vluna/vluna-core vlunactl service-key secret --realm-id demo-realm-1 --key-id pk-aB3dE4fG5hJ6kLmN
+  pnpm --filter @vluna/vluna-core vlunactl service-key secret --realm-id realm-default --key-id pk-aB3dE4fG5hJ6kLmN
   ```
 - Run periodic tasks without the web server:
   - List tasks:
@@ -141,7 +141,7 @@ Commands:
 - Run a reconciliation scan (writes findings into `reconciliations` table):
   ```bash
   pnpm --filter @vluna/vluna-core vlunactl reconciliation run \
-    --realm-id demo-realm-1 \
+    --realm-id realm-default \
     --billing-account-id 00000000-0000-0000-0000-000000000000 \
     --limit 500
   ```

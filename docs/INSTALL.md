@@ -288,13 +288,13 @@ pnpm vlunactl service-key secret \
 - Create the realm (also does baseline provisioning):
   ```bash
   pnpm vlunactl realm create \
-    --realm-id demo-realm-1 \
+    --realm-id realm-default \
     --name 'Demo Realm'
   ```
   Optional: pass realm metadata as JSON:
   ```bash
   pnpm vlunactl realm create \
-    --realm-id demo-realm-1 \
+    --realm-id realm-default \
     --name 'Demo Realm' \
     --metadata-json '{
       "auth": {
@@ -318,11 +318,11 @@ pnpm vlunactl service-key secret \
   ```
 - Create a new Service Key for an existing realm:
   ```bash
-  pnpm vlunactl service-key create --realm-id demo-realm-1
+  pnpm vlunactl service-key create --realm-id realm-default
   ```
   Optional expiration (ISO 8601):
   ```bash
-  pnpm vlunactl service-key create --realm-id demo-realm-1 --expires-at 2026-06-30T00:00:00Z
+  pnpm vlunactl service-key create --realm-id realm-default --expires-at 2026-06-30T00:00:00Z
   ```
 
 ## 4) Install and run the Python SDK
@@ -339,7 +339,7 @@ If your integration uses Service Key auth (including the SDK examples), configur
 your app/SDK. Obtain the `keyId` and derived `secret` from §3.6.
 
 ```bash
-export VLUNA_REALM_ID='demo-realm-1'
+export VLUNA_REALM_ID='realm-default'
 export VLUNA_SERVICE_KEY_ID='pk-...'
 export VLUNA_SERVICE_KEY_SECRET='...'
 ```
@@ -375,7 +375,7 @@ Optional: if you need a `billing_account_id`, query one (seed data may differ ac
 ```sql
 SELECT billing_account_id
 FROM billing_accounts
-WHERE realm_id = 'demo-realm-1'
+WHERE realm_id = 'realm-default'
 LIMIT 1;
 ```
 
@@ -384,7 +384,7 @@ If you started Postgres via Docker Compose, you can run the query inside the con
 ```bash
 docker compose -f infra/docker/docker-compose.yml exec -T db \
   psql -U vluna_superuser -d vluna \
-  -c \"SELECT billing_account_id FROM billing_accounts WHERE realm_id = 'demo-realm-1' LIMIT 1;\"
+  -c \"SELECT billing_account_id FROM billing_accounts WHERE realm_id = 'realm-default' LIMIT 1;\"
 ```
 
 Then export it:

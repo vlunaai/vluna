@@ -10,7 +10,7 @@ import type { EngineInput } from '../../src/services/event-to-ratings.dsl.js'
 function buildEventInput(overrides?: Partial<Extract<EngineInput, { source_kind: 'event' }>>): Extract<EngineInput, { source_kind: 'event' }> {
   return {
     source_kind: 'event',
-    realm_id: 'demo-realm-1',
+    realm_id: 'realm-default',
     billing_account_id: 'ba_1',
     semantic_kind: 'outcome',
     occurred_at: '2025-01-01T00:00:00Z',
@@ -25,7 +25,7 @@ function buildEventInput(overrides?: Partial<Extract<EngineInput, { source_kind:
 function buildAggregateInput(overrides?: Partial<Extract<EngineInput, { source_kind: 'aggregate' }>>): Extract<EngineInput, { source_kind: 'aggregate' }> {
   return {
     source_kind: 'aggregate',
-    realm_id: 'demo-realm-1',
+    realm_id: 'realm-default',
     billing_account_id: 'ba_1',
     semantic_kind: 'outcome',
     event_type: 'demo.outcome',

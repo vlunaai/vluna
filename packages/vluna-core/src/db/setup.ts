@@ -6,12 +6,12 @@ import { sql } from 'kysely'
 import { applyBillingImportFromFile } from '../importer/index.js'
 import { RealmConfigService } from '../security/realm-config.service.js'
 import { newTraceId } from '../support/trace.util.js'
+import { ensureBootstrapRealm } from '../services/realm.service.js'
 import {
   db as appDb,
   DEFAULT_DB_SCHEMA,
   dropAllTables,
   extractPasswordFromDatabaseUri,
-  loadDemoData,
   runSqlFile,
   withDatabaseConnection,
 } from './index.js'
@@ -22,6 +22,11 @@ type SetupOptions = {
 }
 
 const DEV_RESET_FLAG = process.env.VLUNA_DEV_RESET_AND_DEMO === '1'
+const ENABLE_PAYMENT_BOOTSTRAP = process.env.VLUNA_ENABLE_PAYMENT_BOOTSTRAP === '1'
+const IMPORT_DEMO_SEEDS = process.env.VLUNA_IMPORT_DEMO_SEEDS === '1'
+const IMPORT_OPTIONAL_SEEDS = process.env.VLUNA_IMPORT_OPTIONAL_SEEDS === '1'
+const BOOTSTRAP_REALM_ID = process.env.BOOTSTRAP_REALM_ID?.trim() || ''
+const BOOTSTRAP_REALM_NAME = process.env.BOOTSTRAP_REALM_NAME?.trim() || ''
 const isProd = process.env.NODE_ENV?.toLowerCase() === 'production'
 
 const isPgTrue = (value: boolean | 't' | 'f' | null | undefined): boolean =>
@@ -30,19 +35,23 @@ const isPgTrue = (value: boolean | 't' | 'f' | null | undefined): boolean =>
 const scriptDir = path.dirname(fileURLToPath(new URL(import.meta.url)))
 const packageRoot = path.resolve(scriptDir, '../..')
 const grantUserPath = path.resolve(packageRoot, 'migrations/base/sql/grant_user.sql')
+
 const findDataFiles = async (migrationDirs: string[]): Promise<string[]> => {
   const files: string[] = []
+  const groups = ['bootstrap', ...(IMPORT_DEMO_SEEDS ? ['demo'] : []), ...(IMPORT_OPTIONAL_SEEDS ? ['optional'] : [])]
   for (const dir of migrationDirs) {
-    const dataDir = path.resolve(dir, 'data')
-    try {
-      const entries = await fs.readdir(dataDir)
-      for (const entry of entries.sort((a, b) => a.localeCompare(b, undefined, { numeric: true }))) {
-        if (entry.endsWith('.yaml') || entry.endsWith('.yml')) {
-          files.push(path.join(dataDir, entry))
+    for (const group of groups) {
+      const dataDir = path.resolve(dir, 'data', group)
+      try {
+        const entries = await fs.readdir(dataDir)
+        for (const entry of entries.sort((a, b) => a.localeCompare(b, undefined, { numeric: true }))) {
+          if (entry.endsWith('.yaml') || entry.endsWith('.yml')) {
+            files.push(path.join(dataDir, entry))
+          }
         }
+      } catch {
+        // grouped data directory optional
       }
-    } catch {
-      // data directory optional
     }
   }
   return files
@@ -116,6 +125,28 @@ async function assertRuntimeRoleNotPrivileged(appUri: string) {
   }
 }
 
+async function ensureBootstrapRealmIfConfigured(): Promise<void> {
+  if (!BOOTSTRAP_REALM_ID) return
+
+  const bootstrap = await appDb().transaction().execute((trx) =>
+    ensureBootstrapRealm(trx, {
+      realmId: BOOTSTRAP_REALM_ID,
+      name: BOOTSTRAP_REALM_NAME || BOOTSTRAP_REALM_ID,
+      status: 'active',
+    }),
+  )
+  console.log(
+    JSON.stringify({
+      at: 'bootstrap.realm.ready',
+      realm_id: bootstrap.realmId,
+      realm_name: bootstrap.realmName,
+      service_key_id: bootstrap.serviceKey.keyId,
+      service_key_secret_base64: bootstrap.serviceKey.secretBase64,
+      service_key_env_tag: bootstrap.serviceKey.envTag,
+    }),
+  )
+}
+
 export async function setupDatabaseWithGuards(opts: SetupOptions) {
   if (!opts.migrationDirs || opts.migrationDirs.length === 0) {
     throw new Error('[db] migrationDirs are required')
@@ -137,40 +168,43 @@ export async function setupDatabaseWithGuards(opts: SetupOptions) {
     }
     console.warn('[db] DATABASE_MIGRATOR_URI not provided; migrations/seeds skipped (none pending).')
     await assertRuntimeRoleNotPrivileged(appUri)
+    await ensureBootstrapRealmIfConfigured()
+  } else {
+    if (false && isProd && DEV_RESET_FLAG) {
+      throw new Error('[db] drop-all/dev-reset is blocked in production')
+    }
+
+    await withDatabaseConnection(migratorUri, async () => {
+      if (DEV_RESET_FLAG) {
+        console.warn('[db] DEV_RESET flag enabled: dropping all tables')
+        await dropAllTables()
+      }
+      console.log(`[migration] ${opts.migrationDirs}`)
+
+      const migrateResult = await createMigrator(appDb(), opts.migrationDirs).migrateToLatest()
+      migrateResult.results?.forEach((r) => console.log(`[migrate] ${r.status?.padEnd(9)} ${r.migrationName}`))
+      if (migrateResult.error) {
+        throw migrateResult.error
+      }
+
+      await ensureBootstrapRealmIfConfigured()
+
+      const dataFiles = await findDataFiles(opts.migrationDirs)
+      for (const file of dataFiles) {
+        await applyBillingImportFromFile(file, { mode: 'merge', strict: true })
+        console.log(`[importer] applied ${path.basename(file)}`)
+      }
+    })
+
+    await ensureAppRoleExistsWithMigrator(migratorUri, appUri)
+  }
+
+  if (!ENABLE_PAYMENT_BOOTSTRAP) {
+    console.log('[payment-bootstrap] disabled during startup (set VLUNA_ENABLE_PAYMENT_BOOTSTRAP=1 to enable)')
     return
   }
 
-  if (false && isProd && DEV_RESET_FLAG) {
-    throw new Error('[db] drop-all/dev-reset is blocked in production')
-  }
-
-  await withDatabaseConnection(migratorUri, async () => {
-    if (DEV_RESET_FLAG) {
-      console.warn('[db] DEV_RESET flag enabled: dropping all tables')
-      await dropAllTables()
-    }
-    console.log(`[migration] ${opts.migrationDirs}`)
-
-    const migrateResult = await createMigrator(appDb(), opts.migrationDirs).migrateToLatest()
-    migrateResult.results?.forEach((r) => console.log(`[migrate] ${r.status?.padEnd(9)} ${r.migrationName}`))
-    if (migrateResult.error) {
-      throw migrateResult.error
-    }
-
-    const dataFiles = await findDataFiles(opts.migrationDirs)
-    for (const file of dataFiles) {
-      await applyBillingImportFromFile(file, { mode: 'merge', strict: true })
-      console.log(`[importer] applied ${path.basename(file)}`)
-    }
-
-    if (DEV_RESET_FLAG) {
-      await loadDemoData()
-    }
-  })
-
-  await ensureAppRoleExistsWithMigrator(migratorUri, appUri)
-
-  // Bootstrap payment providers (products/prices, webhooks) for all realms
+  // Bootstrap payment providers (products/prices, webhooks) for all realms only when explicitly enabled.
   const realmConfig = new RealmConfigService()
   const realms = await appDb().selectFrom('realms').select('realm_id').execute()
   for (const { realm_id: realmId } of realms) {

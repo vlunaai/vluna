@@ -2,7 +2,7 @@
 -- DEMO DATASET (aligned with sql_migrations_v1.sql · ARCH/TECH v9.1)
 -- 
 -- Revised requirements (clarified for this seed file):
--- 1) Tenancy: Use a single realm 'demo-realm-1'. Realm:Account = 1:N.
+-- 1) Tenancy: Use a single realm 'realm-default'. Realm:Account = 1:N.
 -- 2) Accounts: Must include one account mapped from a remote billing principal:
 --      billing_principal_id = 'i3pkhewz0gll'
 --    Additional accounts are allowed for realism.
@@ -24,12 +24,12 @@
 -- ============================================================================
 
 SET TIME ZONE 'UTC';
-SELECT set_config('app.realm_id', 'demo-realm-1', true);
+SELECT set_config('app.realm_id', 'realm-default', true);
 
 -- ---- Accounts -------------------------------------------------------
 -- INSERT INTO billing_accounts (realm_id, billing_principal_id, billing_account_id) VALUES
---   ('demo-realm-1','i3pkhewz0gll','00000000-0000-0000-0000-000000000000')
+--   ('realm-default','i3pkhewz0gll','00000000-0000-0000-0000-000000000000')
 -- ON CONFLICT DO NOTHING;
 INSERT INTO billing_accounts (realm_id, billing_principal_id) VALUES
-  ('demo-realm-1','demo-internal')
+  ('realm-default','demo-internal')
 ON CONFLICT DO NOTHING;

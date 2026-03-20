@@ -15,6 +15,16 @@ type RealmInput = {
   metadata?: Record<string, unknown>
 }
 
+export type BootstrapRealmResult = {
+  realmId: string
+  realmName: string
+  serviceKey: {
+    keyId: string
+    secretBase64: string
+    envTag: string
+  }
+}
+
 function randomAlphaNumericString(length: number): string {
   const alphabet = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'
   if (length <= 0) return ''
@@ -129,6 +139,54 @@ export async function createRealm(
   await ensureBaseGatingPolicy(trx, input.realmId)
   await ensureFallbackFeatureFamily(trx, input.realmId)
   await ensureDefaultBillingPlan(trx, input.realmId)
+}
+
+export async function ensureBootstrapRealm(
+  trx: Kysely<Database> | Transaction<Database>,
+  input: RealmInput,
+): Promise<BootstrapRealmResult> {
+  const realmId = input.realmId.trim()
+  if (!realmId) {
+    throw new Error('realm_id is required to bootstrap a realm')
+  }
+
+  await createRealm(trx, input)
+
+  const row = await trx
+    .selectFrom('realms')
+    .select(['name'])
+    .where('realm_id', '=', realmId)
+    .executeTakeFirst()
+
+  const serviceApiKeyService = new ServiceApiKeyService()
+  await serviceApiKeyService.loadSecrets(trx as Kysely<Database>)
+
+  const keyRow = await trx
+    .selectFrom('service_api_keys')
+    .select(['key_id', 'allowed_realms'])
+    .execute()
+  const bootstrapKey = keyRow.find((candidate) => {
+    if (!candidate.key_id.startsWith(DEFAULT_SERVICE_API_KEY_PREFIX)) return false
+    return candidate.allowed_realms.includes(realmId)
+  })
+  if (!bootstrapKey) {
+    throw new Error(`bootstrap service key not found for realm ${realmId}`)
+  }
+
+  const derived = serviceApiKeyService.getKey(bootstrapKey.key_id)
+  if (!derived) {
+    throw new Error(`bootstrap service key secret unavailable for realm ${realmId}`)
+  }
+
+  return {
+    realmId,
+    realmName: String(row?.name || input.name || realmId),
+    serviceKey: {
+      keyId: bootstrapKey.key_id,
+      secretBase64: derived.secretBase64,
+      envTag: derived.envTag,
+    },
+  }
 }
 
 async function ensureDefaultServiceApiKey(
