@@ -7,6 +7,7 @@ import { ServiceAuthGuard } from '../../../auth/guards/service-auth.guard.js'
 import { TokenClaimsGuard } from '../../../auth/guards/token-claims.guard.js'
 import { RealmMembershipGuard } from '../../../auth/guards/realm-membership.guard.js'
 import { IdempotencyInterceptor } from '../../../support/idempotency.interceptor.js'
+import { Audit } from '../../../support/audit/audit.decorator.js'
 import type { AppRequest } from '../../../types/app-request.js'
 import type { operations as BillingOps } from '../../../contracts/billing-mgt.js'
 import { JsonRequestBody, JsonResponse, QueryParams } from '../../../contracts/openapi-helpers.js'
@@ -42,6 +43,15 @@ export class MetersController {
 
   @Post('meters')
   @UseInterceptors(IdempotencyInterceptor)
+  @Audit({
+    action: ({ reply, error }) => {
+      if (error) return 'meter.upsert'
+      return reply.statusCode === 201 ? 'meter.create' : 'meter.update'
+    },
+    operationId: 'upsertMeter',
+    targetType: 'meter',
+    targetIdFrom: 'response.data.meter_id',
+  })
   async upsertMeter(
     @Req() req: AppRequest,
     @Res() res: FastifyReply,
@@ -62,6 +72,12 @@ export class MetersController {
 
   @Patch('meters/:meter_id')
   @UseInterceptors(IdempotencyInterceptor)
+  @Audit({
+    action: 'meter.update',
+    operationId: 'updateMeter',
+    targetType: 'meter',
+    targetIdFrom: 'params.meter_id',
+  })
   async updateMeter(
     @Req() req: AppRequest,
     @Param('meter_id') meterId: string,

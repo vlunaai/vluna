@@ -121,7 +121,7 @@ export class BillingPlansController {
   @Post('billing-plans/:plan_id/entitlements')
   @UseInterceptors(IdempotencyInterceptor)
   @Audit({
-    action: 'plan.entitlements.upsert',
+    action: 'plan_entitlement.upsert',
     operationId: 'upsertBillingPlanEntitlements',
     targetType: 'billing_plan',
     targetIdFrom: 'params.plan_id',
@@ -146,7 +146,7 @@ export class BillingPlansController {
   @Delete('billing-plans/:plan_id/entitlements/:bpe_id')
   @UseInterceptors(IdempotencyInterceptor)
   @Audit({
-    action: 'plan.entitlements.delete',
+    action: 'plan_entitlement.delete',
     operationId: 'deleteBillingPlanEntitlement',
     targetType: 'billing_plan_entitlement',
     targetIdFrom: 'params.bpe_id',
@@ -174,7 +174,7 @@ export class BillingPlansController {
   @UseGuards(ServiceAccountGuard)
   @UseInterceptors(IdempotencyInterceptor)
   @Audit({
-    action: 'plan.assignment.create',
+    action: 'plan_assignment.create',
     operationId: 'createBillingPlanAssignment',
     targetType: 'billing_plan_assignment',
     targetIdFrom: 'response.data.assignment_id',
@@ -194,7 +194,7 @@ export class BillingPlansController {
   @UseGuards(ServiceAccountGuard)
   @UseInterceptors(IdempotencyInterceptor)
   @Audit({
-    action: 'plan.assignment.update',
+    action: 'plan_assignment.update',
     operationId: 'updateBillingPlanAssignment',
     targetType: 'billing_plan_assignment',
     targetIdFrom: 'params.assignment_id',

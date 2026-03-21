@@ -7,6 +7,7 @@ import { ServiceAuthGuard } from '../../../auth/guards/service-auth.guard.js'
 import { TokenClaimsGuard } from '../../../auth/guards/token-claims.guard.js'
 import { RealmMembershipGuard } from '../../../auth/guards/realm-membership.guard.js'
 import { IdempotencyInterceptor } from '../../../support/idempotency.interceptor.js'
+import { Audit } from '../../../support/audit/audit.decorator.js'
 import type { AppRequest } from '../../../types/app-request.js'
 import type { operations as BillingOps } from '../../../contracts/billing-mgt.js'
 import { JsonRequestBody, JsonResponse, QueryParams } from '../../../contracts/openapi-helpers.js'
@@ -71,6 +72,15 @@ export class EventRatingPoliciesController {
 
   @Post('event-rating-policies')
   @UseInterceptors(IdempotencyInterceptor)
+  @Audit({
+    action: ({ reply, error }) => {
+      if (error) return 'event_rating_policy.upsert'
+      return reply.statusCode === 201 ? 'event_rating_policy.create' : 'event_rating_policy.update'
+    },
+    operationId: 'upsertEventRatingPolicy',
+    targetType: 'event_rating_policy',
+    targetIdFrom: 'response.data.policy_id',
+  })
   async upsertEventRatingPolicy(
     @Req() req: AppRequest,
     @Res() res: FastifyReply,
@@ -92,6 +102,12 @@ export class EventRatingPoliciesController {
 
   @Post('event-rating-policies/:policy_id')
   @UseInterceptors(IdempotencyInterceptor)
+  @Audit({
+    action: 'event_rating_policy.update',
+    operationId: 'updateEventRatingPolicy',
+    targetType: 'event_rating_policy',
+    targetIdFrom: 'params.policy_id',
+  })
   async updateEventRatingPolicy(
     @Req() req: AppRequest,
     @Param('policy_id') policyIdParam: string,
@@ -103,6 +119,12 @@ export class EventRatingPoliciesController {
   }
 
   @Delete('event-rating-policies/:policy_id')
+  @Audit({
+    action: 'event_rating_policy.delete',
+    operationId: 'deleteEventRatingPolicy',
+    targetType: 'event_rating_policy',
+    targetIdFrom: 'params.policy_id',
+  })
   async deleteEventRatingPolicy(
     @Req() req: AppRequest,
     @Param('policy_id') policyIdParam: string,
@@ -125,6 +147,22 @@ export class EventRatingPoliciesController {
 
   @Post('event-rating-policies/:policy_id/versions')
   @UseInterceptors(IdempotencyInterceptor)
+  @Audit({
+    action: ({ reply, error }) => {
+      if (error) return 'event_rating_policy_version.upsert'
+      return reply.statusCode === 201 ? 'event_rating_policy_version.create' : 'event_rating_policy_version.update'
+    },
+    operationId: 'createEventRatingPolicyVersion',
+    targetType: 'event_rating_policy_version',
+    targetIdFrom: ({ req, responseBody }) => {
+      const params = (req.params ?? {}) as Record<string, unknown>
+      const policyId = typeof params.policy_id === 'string' ? params.policy_id.trim() : ''
+      const response = responseBody as { data?: { policy_version?: unknown } } | undefined
+      const policyVersion = typeof response?.data?.policy_version === 'string' ? response.data.policy_version.trim() : ''
+      if (policyId && policyVersion) return `${policyId}:${policyVersion}`
+      return policyId || policyVersion || undefined
+    },
+  })
   async createEventRatingPolicyVersion(
     @Req() req: AppRequest,
     @Res() res: FastifyReply,
@@ -153,6 +191,18 @@ export class EventRatingPoliciesController {
 
   @Patch('event-rating-policies/:policy_id/versions/:policy_version')
   @UseInterceptors(IdempotencyInterceptor)
+  @Audit({
+    action: 'event_rating_policy_version.update',
+    operationId: 'updateEventRatingPolicyVersion',
+    targetType: 'event_rating_policy_version',
+    targetIdFrom: ({ req }) => {
+      const params = (req.params ?? {}) as Record<string, unknown>
+      const policyId = typeof params.policy_id === 'string' ? params.policy_id.trim() : ''
+      const policyVersion = typeof params.policy_version === 'string' ? params.policy_version.trim() : ''
+      if (policyId && policyVersion) return `${policyId}:${policyVersion}`
+      return policyId || policyVersion || undefined
+    },
+  })
   async updateEventRatingPolicyVersion(
     @Req() req: AppRequest,
     @Param('policy_id') policyIdParam: string,
@@ -166,6 +216,18 @@ export class EventRatingPoliciesController {
   }
 
   @Delete('event-rating-policies/:policy_id/versions/:policy_version')
+  @Audit({
+    action: 'event_rating_policy_version.delete',
+    operationId: 'deleteEventRatingPolicyVersion',
+    targetType: 'event_rating_policy_version',
+    targetIdFrom: ({ req }) => {
+      const params = (req.params ?? {}) as Record<string, unknown>
+      const policyId = typeof params.policy_id === 'string' ? params.policy_id.trim() : ''
+      const policyVersion = typeof params.policy_version === 'string' ? params.policy_version.trim() : ''
+      if (policyId && policyVersion) return `${policyId}:${policyVersion}`
+      return policyId || policyVersion || undefined
+    },
+  })
   async deleteEventRatingPolicyVersion(
     @Req() req: AppRequest,
     @Param('policy_id') policyIdParam: string,

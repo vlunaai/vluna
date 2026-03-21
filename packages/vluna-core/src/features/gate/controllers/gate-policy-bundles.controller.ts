@@ -7,6 +7,7 @@ import { ServiceAuthGuard } from '../../../auth/guards/service-auth.guard.js'
 import { TokenClaimsGuard } from '../../../auth/guards/token-claims.guard.js'
 import { RealmMembershipGuard } from '../../../auth/guards/realm-membership.guard.js'
 import { IdempotencyInterceptor } from '../../../support/idempotency.interceptor.js'
+import { Audit } from '../../../support/audit/audit.decorator.js'
 import { okEnvelope } from '../../../common/envelope.js'
 import type { AppRequest } from '../../../types/app-request.js'
 import { GatePolicyBundlesService } from '../services/gate-policy-bundles.service.js'
@@ -78,6 +79,15 @@ export class GatePolicyBundlesController {
 
   @Post()
   @UseInterceptors(IdempotencyInterceptor)
+  @Audit({
+    action: ({ reply, error }) => {
+      if (error) return 'gate_policy_bundle.upsert'
+      return reply.statusCode === 201 ? 'gate_policy_bundle.create' : 'gate_policy_bundle.update'
+    },
+    operationId: 'upsertGatePolicyBundle',
+    targetType: 'gate_policy_bundle',
+    targetIdFrom: 'response.data.bundle_id',
+  })
   async upsertPolicyBundle(
     @Req() req: AppRequest,
     @Res() res: FastifyReply,
@@ -101,6 +111,12 @@ export class GatePolicyBundlesController {
 
   @Patch(':bundle_id')
   @UseInterceptors(IdempotencyInterceptor)
+  @Audit({
+    action: 'gate_policy_bundle.update',
+    operationId: 'updateGatePolicyBundle',
+    targetType: 'gate_policy_bundle',
+    targetIdFrom: 'params.bundle_id',
+  })
   async updatePolicyBundle(
     @Req() req: AppRequest,
     @Param('bundle_id') bundleId: string,
@@ -116,6 +132,12 @@ export class GatePolicyBundlesController {
 
   @Delete(':bundle_id')
   @UseInterceptors(IdempotencyInterceptor)
+  @Audit({
+    action: 'gate_policy_bundle.delete',
+    operationId: 'deleteGatePolicyBundle',
+    targetType: 'gate_policy_bundle',
+    targetIdFrom: 'params.bundle_id',
+  })
   async deletePolicyBundle(
     @Req() req: AppRequest,
     @Param('bundle_id') bundleId: string,

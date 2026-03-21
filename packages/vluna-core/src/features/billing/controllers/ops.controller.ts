@@ -15,6 +15,7 @@ import type { operations as OpsOps, components as OpsComponents } from '../../..
 import { JsonRequestBody, JsonResponse, PathParams, QueryParams } from '../../../contracts/openapi-helpers.js'
 import { allowCrossAccountAccess } from '../../../auth/utils/access.js'
 import { IdempotencyInterceptor } from '../../../support/idempotency.interceptor.js'
+import { Audit } from '../../../support/audit/audit.decorator.js'
 import { normalizeGrantBindingOverride } from '../../../services/grant-issuance.service.js'
 
 // OpenAPI mapping: tag=Ops
@@ -264,6 +265,12 @@ export class OpsController {
 
   @Post('catalog/products')
   @UseInterceptors(IdempotencyInterceptor)
+  @Audit({
+    action: 'ops_catalog_product.create',
+    operationId: 'createOpsCatalogProduct',
+    targetType: 'ops_catalog_product',
+    targetIdFrom: 'response.data.catalog_product_id',
+  })
   async createCatalogProduct(
     @Req() req: AppRequest,
     @Res() res: FastifyReply,
@@ -330,6 +337,12 @@ export class OpsController {
 
   @Patch('catalog/products/:catalog_product_id')
   @UseInterceptors(IdempotencyInterceptor)
+  @Audit({
+    action: 'ops_catalog_product.update',
+    operationId: 'updateOpsCatalogProduct',
+    targetType: 'ops_catalog_product',
+    targetIdFrom: 'params.catalog_product_id',
+  })
   async updateCatalogProduct(
     @Req() req: AppRequest,
     @Param() params: GetOpsCatalogProductParams,
@@ -437,6 +450,12 @@ export class OpsController {
   }
 
   @Delete('catalog/products/:catalog_product_id')
+  @Audit({
+    action: 'ops_catalog_product.archive',
+    operationId: 'deleteOpsCatalogProduct',
+    targetType: 'ops_catalog_product',
+    targetIdFrom: 'params.catalog_product_id',
+  })
   async deleteCatalogProduct(
     @Req() req: AppRequest,
     @Param() params: DeleteOpsCatalogProductParams,
@@ -629,6 +648,12 @@ export class OpsController {
 
   @Post('catalog/prices')
   @UseInterceptors(IdempotencyInterceptor)
+  @Audit({
+    action: 'ops_catalog_price.create',
+    operationId: 'createOpsCatalogPrice',
+    targetType: 'ops_catalog_price',
+    targetIdFrom: 'response.data.catalog_price_id',
+  })
   async createCatalogPrice(
     @Req() req: AppRequest,
     @Res() res: FastifyReply,
@@ -720,6 +745,12 @@ export class OpsController {
 
   @Patch('catalog/prices/:catalog_price_id')
   @UseInterceptors(IdempotencyInterceptor)
+  @Audit({
+    action: 'ops_catalog_price.update',
+    operationId: 'updateOpsCatalogPrice',
+    targetType: 'ops_catalog_price',
+    targetIdFrom: 'params.catalog_price_id',
+  })
   async updateCatalogPrice(
     @Req() req: AppRequest,
     @Param() params: GetOpsCatalogPriceParams,
@@ -863,6 +894,12 @@ export class OpsController {
   }
 
   @Delete('catalog/prices/:catalog_price_id')
+  @Audit({
+    action: 'ops_catalog_price.archive',
+    operationId: 'deleteOpsCatalogPrice',
+    targetType: 'ops_catalog_price',
+    targetIdFrom: 'params.catalog_price_id',
+  })
   async deleteCatalogPrice(
     @Req() req: AppRequest,
     @Param() params: DeleteOpsCatalogPriceParams,

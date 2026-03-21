@@ -6,6 +6,7 @@ import { ServiceAuthGuard } from '../../../auth/guards/service-auth.guard.js'
 import { TokenClaimsGuard } from '../../../auth/guards/token-claims.guard.js'
 import { RealmMembershipGuard } from '../../../auth/guards/realm-membership.guard.js'
 import { IdempotencyInterceptor } from '../../../support/idempotency.interceptor.js'
+import { Audit } from '../../../support/audit/audit.decorator.js'
 import type { AppRequest } from '../../../types/app-request.js'
 import type { operations as BillingOps } from '../../../contracts/billing-mgt.js'
 import { JsonRequestBody, JsonResponse, QueryParams } from '../../../contracts/openapi-helpers.js'
@@ -49,6 +50,12 @@ export class BillingAccountsController {
 
   @Patch('billing-accounts/:billing_account_id/billing-details')
   @UseInterceptors(IdempotencyInterceptor)
+  @Audit({
+    action: 'billing_account.update_billing_details',
+    operationId: 'updateBillingAccountBillingDetails',
+    targetType: 'billing_account',
+    targetIdFrom: 'params.billing_account_id',
+  })
   async updateBillingAccountBillingDetails(
     @Req() req: AppRequest,
     @Param('billing_account_id') billingAccountIdParam: string,

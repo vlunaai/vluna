@@ -64,11 +64,11 @@ export class DatController {
   @Post('session/issue')
   @UseGuards(OptionalRealmGuard, AuthRequiredGuard, DatSessionIssueAuthGuard, DatSessionIssueRateLimitGuard)
   @Audit({
-    action: 'dat_token.create',
+    action: 'dat_session.issue',
     operationId: 'issueDatSession',
-    targetType: 'dat_token',
+    targetType: 'dat_session',
     targetIdFrom: 'response.data.jti',
-    redact: ['body.access_token'],
+    responseRedact: ['data.access_token'],
   })
   async issueSession(@Req() req: AppRequest, @Body() body: IssueSessionBody) {
     const requested_scopes = normalizeScopes(body?.requested_scopes)
@@ -176,9 +176,9 @@ export class DatController {
   @Post('session/revoke')
   @UseGuards(AuthRequiredGuard, DatBootstrapGuard)
   @Audit({
-    action: 'dat_token.revoke',
+    action: 'dat_session.revoke',
     operationId: 'revokeDatSession',
-    targetType: 'dat_token',
+    targetType: 'dat_session',
     targetIdFrom: ({ req, responseBody }) => {
       const body = req.body as RevokeBody | undefined
       if (typeof body?.jti === 'string' && body.jti.trim()) return body.jti.trim()

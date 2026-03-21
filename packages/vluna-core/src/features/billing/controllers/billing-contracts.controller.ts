@@ -10,6 +10,7 @@ import { RealmMembershipGuard } from '../../../auth/guards/realm-membership.guar
 import { PrincipalGuard } from '../../../auth/guards/principal.guard.js'
 import { PrincipalBillingAccountGuard } from '../../../auth/guards/principal-billing-account.guard.js'
 import { IdempotencyInterceptor } from '../../../support/idempotency.interceptor.js'
+import { Audit } from '../../../support/audit/audit.decorator.js'
 import type { AppRequest } from '../../../types/app-request.js'
 import type { operations as BillingOps } from '../../../contracts/billing-mgt.js'
 import { JsonRequestBody, JsonResponse, QueryParams } from '../../../contracts/openapi-helpers.js'
@@ -78,6 +79,15 @@ export class BillingContractsController {
   @Scopes(BILLING_SCOPES.WRITE)
   @UseGuards(RequireServiceAuthGuard)
   @UseInterceptors(IdempotencyInterceptor)
+  @Audit({
+    action: ({ reply, error }) => {
+      if (error) return 'billing_contract.upsert'
+      return reply.statusCode === 201 ? 'billing_contract.create' : 'billing_contract.update'
+    },
+    operationId: 'upsertBillingContract',
+    targetType: 'billing_contract',
+    targetIdFrom: 'response.data.contract_id',
+  })
   async upsertBillingContract(
     @Req() req: AppRequest,
     @Res() res: FastifyReply,
@@ -102,6 +112,12 @@ export class BillingContractsController {
   @Scopes(BILLING_SCOPES.WRITE)
   @UseGuards(RequireServiceAuthGuard)
   @UseInterceptors(IdempotencyInterceptor)
+  @Audit({
+    action: 'billing_contract.update',
+    operationId: 'updateBillingContract',
+    targetType: 'billing_contract',
+    targetIdFrom: 'params.contract_id',
+  })
   async updateBillingContract(
     @Req() req: AppRequest,
     @Param('contract_id') contractIdParam: string,
@@ -128,6 +144,23 @@ export class BillingContractsController {
   @Scopes(BILLING_SCOPES.WRITE)
   @UseGuards(RequireServiceAuthGuard)
   @UseInterceptors(IdempotencyInterceptor)
+  @Audit({
+    action: ({ reply, error }) => {
+      if (error) return 'billing_contract_term.upsert'
+      return reply.statusCode === 201 ? 'billing_contract_term.create' : 'billing_contract_term.update'
+    },
+    operationId: 'upsertContractTerm',
+    targetType: 'billing_contract_term',
+    targetIdFrom: ({ req, responseBody }) => {
+      const params = (req.params ?? {}) as Record<string, unknown>
+      const contractId = typeof params.contract_id === 'string' ? params.contract_id.trim() : ''
+      const response = responseBody as { data?: { term_id?: unknown; contract_term_id?: unknown } } | undefined
+      const termIdCandidate = response?.data?.term_id ?? response?.data?.contract_term_id
+      const termId = typeof termIdCandidate === 'string' ? termIdCandidate.trim() : ''
+      if (contractId && termId) return `${contractId}:${termId}`
+      return termId || contractId || undefined
+    },
+  })
   async upsertContractTerm(
     @Req() req: AppRequest,
     @Res() res: FastifyReply,

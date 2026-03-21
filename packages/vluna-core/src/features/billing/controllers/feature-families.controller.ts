@@ -7,6 +7,7 @@ import { ServiceAuthGuard } from '../../../auth/guards/service-auth.guard.js'
 import { TokenClaimsGuard } from '../../../auth/guards/token-claims.guard.js'
 import { RealmMembershipGuard } from '../../../auth/guards/realm-membership.guard.js'
 import { IdempotencyInterceptor } from '../../../support/idempotency.interceptor.js'
+import { Audit } from '../../../support/audit/audit.decorator.js'
 import type { AppRequest } from '../../../types/app-request.js'
 import type { operations as BillingOps } from '../../../contracts/billing-mgt.js'
 import { JsonRequestBody, JsonResponse, QueryParams } from '../../../contracts/openapi-helpers.js'
@@ -43,6 +44,15 @@ export class FeatureFamiliesController {
 
   @Post('feature-families')
   @UseInterceptors(IdempotencyInterceptor)
+  @Audit({
+    action: ({ reply, error }) => {
+      if (error) return 'feature_family.upsert'
+      return reply.statusCode === 201 ? 'feature_family.create' : 'feature_family.update'
+    },
+    operationId: 'upsertFeatureFamily',
+    targetType: 'feature_family',
+    targetIdFrom: 'response.data.feature_family_id',
+  })
   async upsertFeatureFamily(
     @Req() req: AppRequest,
     @Res() res: FastifyReply,
@@ -63,6 +73,12 @@ export class FeatureFamiliesController {
 
   @Patch('feature-families/:feature_family_id')
   @UseInterceptors(IdempotencyInterceptor)
+  @Audit({
+    action: 'feature_family.update',
+    operationId: 'updateFeatureFamily',
+    targetType: 'feature_family',
+    targetIdFrom: 'params.feature_family_id',
+  })
   async updateFeatureFamily(
     @Req() req: AppRequest,
     @Param('feature_family_id') featureFamilyId: string,
@@ -73,6 +89,12 @@ export class FeatureFamiliesController {
   }
 
   @Delete('feature-families/:feature_family_id')
+  @Audit({
+    action: 'feature_family.delete',
+    operationId: 'deleteFeatureFamily',
+    targetType: 'feature_family',
+    targetIdFrom: 'params.feature_family_id',
+  })
   async deleteFeatureFamily(
     @Req() req: AppRequest,
     @Param('feature_family_id') featureFamilyId: string,

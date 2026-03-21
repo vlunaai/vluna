@@ -12,6 +12,7 @@ import {
 import type { AppRequest } from '../../../types/app-request.js'
 import { McpSessionTokenService } from '../services/mcp-session-token.service.js'
 import { McpSessionGuard } from '../services/mcp-session.guard.js'
+import { Audit } from '../../../support/audit/audit.decorator.js'
 
 type IssueSessionBody = {
   requested_scopes?: string[]
@@ -34,6 +35,18 @@ export class McpController {
 
   @Post('session:issue')
   @UseGuards(AuthRequiredGuard, ServiceAuthGuard, TokenClaimsGuard)
+  @Audit({
+    action: 'mcp_session.issue',
+    operationId: 'issueMcpSession',
+    targetType: 'mcp_session',
+    targetIdFrom: ({ responseBody }) => {
+      const response = responseBody as { data?: { subject_id?: unknown; selected_realm?: unknown } } | undefined
+      const subjectId = typeof response?.data?.subject_id === 'string' ? response.data.subject_id.trim() : ''
+      const selectedRealm = typeof response?.data?.selected_realm === 'string' ? response.data.selected_realm.trim() : ''
+      return subjectId || selectedRealm || undefined
+    },
+    responseRedact: ['data.mcp_session_token'],
+  })
   async issueSession(@Req() req: AppRequest, @Body() body: IssueSessionBody) {
     const params: IssueMcpSessionParams = {
       req,

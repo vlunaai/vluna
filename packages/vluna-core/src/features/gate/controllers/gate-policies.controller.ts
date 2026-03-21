@@ -7,6 +7,7 @@ import { ServiceAuthGuard } from '../../../auth/guards/service-auth.guard.js'
 import { TokenClaimsGuard } from '../../../auth/guards/token-claims.guard.js'
 import { RealmMembershipGuard } from '../../../auth/guards/realm-membership.guard.js'
 import { IdempotencyInterceptor } from '../../../support/idempotency.interceptor.js'
+import { Audit } from '../../../support/audit/audit.decorator.js'
 import type { AppRequest } from '../../../types/app-request.js'
 import { okEnvelope } from '../../../common/envelope.js'
 import { GatePoliciesService } from '../services/gate-policies.service.js'
@@ -58,6 +59,12 @@ export class GatePoliciesController {
 
   @Post()
   @UseInterceptors(IdempotencyInterceptor)
+  @Audit({
+    action: 'gate_policy.create',
+    operationId: 'createGatePolicy',
+    targetType: 'gate_policy',
+    targetIdFrom: 'response.data.policy_id',
+  })
   async createPolicy(
     @Req() req: AppRequest,
     @Res() res: FastifyReply,
@@ -83,6 +90,12 @@ export class GatePoliciesController {
 
   @Patch(':policy_id')
   @UseInterceptors(IdempotencyInterceptor)
+  @Audit({
+    action: 'gate_policy.update',
+    operationId: 'updateGatePolicy',
+    targetType: 'gate_policy',
+    targetIdFrom: 'params.policy_id',
+  })
   async updatePolicy(
     @Req() req: AppRequest,
     @Param('policy_id') policyId: string,
@@ -101,6 +114,12 @@ export class GatePoliciesController {
 
   @Delete(':policy_id')
   @UseInterceptors(IdempotencyInterceptor)
+  @Audit({
+    action: 'gate_policy.delete',
+    operationId: 'deleteGatePolicy',
+    targetType: 'gate_policy',
+    targetIdFrom: 'params.policy_id',
+  })
   async deletePolicy(
     @Req() req: AppRequest,
     @Param('policy_id') policyId: string,
