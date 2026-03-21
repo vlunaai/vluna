@@ -3,6 +3,7 @@ import { Reflector } from '@nestjs/core'
 import type { FastifyReply } from 'fastify'
 import { catchError, from, map, mergeMap, Observable, throwError } from 'rxjs'
 import type { AppRequest } from '../../types/app-request.js'
+import { isAuditEnabled } from '../../config/audit.js'
 import { AUDIT_METADATA_KEY } from './audit.constants.js'
 import { redactAuditValue } from './audit.redaction.js'
 import {
@@ -26,6 +27,9 @@ export class AuditInterceptor implements NestInterceptor {
   ) {}
 
   intercept(context: ExecutionContext, next: CallHandler): Observable<unknown> {
+    if (!isAuditEnabled()) {
+      return next.handle()
+    }
     if (context.getType() !== 'http') {
       return next.handle()
     }

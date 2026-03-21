@@ -1,5 +1,5 @@
 import 'reflect-metadata'
-import { describe, expect, it, vi } from 'vitest'
+import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { HttpException } from '@nestjs/common'
 import { Reflector } from '@nestjs/core'
 import type { FastifyReply } from 'fastify'
@@ -11,6 +11,20 @@ describe('AuditInterceptor', () => {
   const writeSpy = vi.fn(async () => undefined)
   const reflector = new Reflector()
   const interceptor = new AuditInterceptor(reflector, { write: writeSpy } as never)
+
+  const prevAuditEnabled = process.env.VLUNA_AUDIT_ENABLED
+
+  beforeEach(() => {
+    process.env.VLUNA_AUDIT_ENABLED = 'true'
+  })
+
+  afterAll(() => {
+    if (prevAuditEnabled === undefined) {
+      delete process.env.VLUNA_AUDIT_ENABLED
+      return
+    }
+    process.env.VLUNA_AUDIT_ENABLED = prevAuditEnabled
+  })
 
   it('writes success audit rows with redacted body', async () => {
     writeSpy.mockClear()

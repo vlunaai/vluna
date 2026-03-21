@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common'
 import { randomUUID } from 'node:crypto'
 import type { Kysely } from 'kysely'
+import { isAuditEnabled } from '../../config/audit.js'
 import { db } from '../../db/index.js'
 import type { Database } from '../../types/database.js'
 import type { AuditLogInsert } from './audit.types.js'
@@ -8,6 +9,7 @@ import type { AuditLogInsert } from './audit.types.js'
 @Injectable()
 export class AuditWriter {
   async write(entry: AuditLogInsert, trx?: Kysely<Database>) {
+    if (!isAuditEnabled()) return
     const database = trx ?? db()
     try {
       await database
