@@ -64,7 +64,7 @@ export class PlatformTokenError extends Error {
 export class PlatformTokenService {
   private readonly defaultAudience =
     (process.env.VLUNA_PLATFORM_TOKEN_AUDIENCE || '').trim() || 'oss.vluna.ai'
-  private readonly issuerBase = (process.env.VLUNA_PLATFORM_TOKEN_ISSUER || process.env.VLUNA_PUBLIC_URL || 'https://vluna.tapray.com').replace(/\/$/, '')
+  private readonly issuerBase = (process.env.VLUNA_PLATFORM_TOKEN_ISSUER || process.env.VLUNA_PUBLIC_URL || 'https://api.vluna.ai').replace(/\/$/, '')
 
   constructor(@Inject(ServiceApiKeyService) private readonly serviceApiKeyService: ServiceApiKeyService) {}
 
