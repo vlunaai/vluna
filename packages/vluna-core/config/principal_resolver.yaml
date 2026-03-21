@@ -2,9 +2,9 @@ principal_resolver:
   # Global default (used when no realm/app match)
   default:
     issuers:
-      - issuer: "https://v.id.tapray.com/oidc"
-        jwks_uri: "https://v.id.tapray.com/oidc/jwks"
-        audiences: ["https://monorepo.api.tapray.com"]
+      - issuer: "https://v.id.vluna.ai/oidc"
+        jwks_uri: "https://v.id.vluna.ai/oidc/jwks"
+        audiences: ["https://aud.api.vluna.ai"]
         alg_whitelist: ["RS256","RS384","RS512","ES256","ES384","ES512"]
         claim_rules:
           - when: "has('organization_id')"
@@ -25,7 +25,7 @@ principal_resolver:
       issuers:
         - issuer: "https://auth0.us-east.example.com/"
           jwks_uri: "https://auth0.us-east.example.com/.well-known/jwks.json"
-          audiences: ["https://monorepo.api.tapray.com"]
+          audiences: ["https://aud.api.vluna.ai"]
           claim_rules:
             - when: "has('https://example.com/org_id')"
               principal:

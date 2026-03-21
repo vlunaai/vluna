@@ -4,7 +4,7 @@
 -- Revised requirements (clarified for this seed file):
 -- 1) Tenancy: Use a single realm 'realm-default'. Realm:Account = 1:N.
 -- 2) Accounts: Must include one account mapped from a remote billing principal:
---      billing_principal_id = 'i3pkhewz0gll'
+--      billing_principal_id = 'r20ow9li7r5b'
 --    Additional accounts are allowed for realism.
 -- 3) Catalog (provider='stripe'):
 --      - subscription (active) 2 products
@@ -28,7 +28,7 @@ SELECT set_config('app.realm_id', 'realm-default', true);
 
 -- ---- Accounts -------------------------------------------------------
 -- INSERT INTO billing_accounts (realm_id, billing_principal_id, billing_account_id) VALUES
---   ('realm-default','i3pkhewz0gll','00000000-0000-0000-0000-000000000000')
+--   ('realm-default','r20ow9li7r5b','00000000-0000-0000-0000-000000000000')
 -- ON CONFLICT DO NOTHING;
 INSERT INTO billing_accounts (realm_id, billing_principal_id) VALUES
   ('realm-default','demo-internal')
