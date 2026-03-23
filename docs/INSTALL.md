@@ -1,7 +1,7 @@
 # Local Install & Run (Community Edition)
 
 This guide helps you run the **Vluna Community Edition API** locally and then verify your setup using the
-**`vlunaai-sdk` (Python SDK)** examples.
+**`vlunaai` (Python SDK)** examples.
 
 Assumptions:
 - API base URL: `http://localhost:3002`
@@ -347,15 +347,15 @@ export VLUNA_SERVICE_KEY_SECRET='...'
 ### 4.2 Use as a dependency (install only)
 
 ```bash
-pip install vlunaai-sdk
+pip install vlunaai
 ```
 
 ### 4.3 Develop the SDK from this repo (editable + tests)
 
-Assuming the SDK lives at `sdks/python/vlunaai-sdk`:
+Assuming the SDK lives at `sdks/python/vlunaai`:
 
 ```bash
-cd sdks/python/vlunaai-sdk
+cd sdks/python/vlunaai
 
 uv venv
 uv pip install -e '.[dev]'
@@ -366,7 +366,7 @@ uv run python -m pytest
 
 ## 5) Run the SDK examples (local API)
 
-Examples live under `sdks/python/vlunaai-sdk/examples/`:
+Examples live under `sdks/python/vlunaai/examples/`:
 - `service_key_quickstart.py` (S2S: Service Key)
 - `bearer_quickstart.py` (issue a token via Service Key, then call via Bearer)
 
@@ -396,7 +396,7 @@ export VLUNA_BILLING_ACCOUNT_ID='...'
 ### 5.2 Run the examples
 
 ```bash
-cd sdks/python/vlunaai-sdk
+cd sdks/python/vlunaai
 
 # S2S example (defaults to http://localhost:3002/mgt/v1)
 uv run python examples/service_key_quickstart.py

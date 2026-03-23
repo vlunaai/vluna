@@ -71,7 +71,7 @@ self-hosted 的安装与 Service Key 生成流程见：`INSTALL.md`。
 import asyncio
 import os
 
-from vlunaai_sdk import (
+from vlunaai import (
   VlunaAIConfig,
   RequestContext,
   ServiceClientOptions,
@@ -203,7 +203,7 @@ access_token = token_envelope.data.access_token  # type: ignore[union-attr]
 前端调用时你通常还需要一个 account 上下文（`billing_account_id`）。建议从你自己的映射表里取出并传入：
 
 ```python
-from vlunaai_sdk import (
+from vlunaai import (
   VlunaAIConfig,
   BearerClientOptions,
   RequestContext,

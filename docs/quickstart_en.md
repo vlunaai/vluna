@@ -83,7 +83,7 @@ This snippet focuses only on the SDK integration flow:
 import asyncio
 import os
 
-from vlunaai_sdk import (
+from vlunaai import (
   VlunaAIConfig,
   RequestContext,
   ServiceClientOptions,
@@ -221,7 +221,7 @@ For frontend calls you typically also need an account context (`billing_account_
 and pass it via context:
 
 ```python
-from vlunaai_sdk import (
+from vlunaai import (
   VlunaAIConfig,
   BearerClientOptions,
   RequestContext,
