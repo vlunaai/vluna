@@ -3,6 +3,12 @@
 [![CI](https://github.com/tapsvc/vluna/actions/workflows/ci.yml/badge.svg)](https://github.com/tapsvc/vluna/actions/workflows/ci.yml)
 [![License: BSL 1.1](https://img.shields.io/badge/License-BSL%201.1-blue.svg)](./LICENSE)
 
+## Managed and self-hosted options
+
+For a fully managed production deployment, use [Vluna Cloud](https://vluna.ai).
+
+This repository is the open-source self-hosted/community edition.
+
 ## What is Vluna?
 
 Vluna is cost tracking, billing and runtime usage control for AI agents.
