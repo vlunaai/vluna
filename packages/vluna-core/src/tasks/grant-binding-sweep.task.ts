@@ -1,5 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common'
-import type { Kysely, Transaction } from 'kysely'
+import { sql, type Kysely, type Transaction } from 'kysely'
 import { db, setRlsSession } from '../db/index.js'
 import type { Database } from '../types/database.js'
 import {
@@ -98,6 +98,14 @@ const MAX_BINDINGS_PER_ACCOUNT = (() => {
   return Math.floor(parsed)
 })()
 
+const BUNDLE_RECONCILE_LIMIT = (() => {
+  const raw = process.env.VLUNA_GRANT_SWEEP_BUNDLE_RECONCILE_LIMIT
+  if (!raw) return 100
+  const parsed = Number(raw)
+  if (!Number.isFinite(parsed) || parsed <= 0) return 100
+  return Math.min(Math.floor(parsed), 1000)
+})()
+
 @Injectable()
 export class GrantBindingSweepTask implements PeriodicTaskDefinition {
   readonly name = 'grant-binding-sweep'
@@ -135,6 +143,8 @@ export class GrantBindingSweepTask implements PeriodicTaskDefinition {
     const subscriptionCache = new Map<string, SubscriptionInfo>()
 
     await this.runCampaignPhase(dbHandle, realmId, now)
+
+    const reconciledBundles = await this.reconcileGateBundles(dbHandle, realmId, now)
 
     const accounts = (await dbHandle
       .selectFrom('billing_accounts')
@@ -175,9 +185,54 @@ export class GrantBindingSweepTask implements PeriodicTaskDefinition {
 
     if (processedBindings > 0 || issuedGrants > 0) {
       this.logger.log(
-        `Grant sweep realm ${realmId} processed ${processedBindings} bindings; issued ${issuedGrants} grants (${now.toISOString()})`,
+        `Grant sweep realm ${realmId} processed ${processedBindings} bindings; issued ${issuedGrants} grants; reconciled ${reconciledBundles} bundles (${now.toISOString()})`,
       )
+    } else if (reconciledBundles > 0) {
+      this.logger.log(`Grant sweep realm ${realmId} reconciled ${reconciledBundles} gate bundles (${now.toISOString()})`)
     }
+  }
+
+  private async reconcileGateBundles(dbHandle: Kysely<Database>, realmId: string, now: Date): Promise<number> {
+    const staleAccounts = await dbHandle.transaction().execute(async (trx) => {
+      await setRlsSession(trx, { realmId, isRealmAdmin: true })
+      const result = await sql<{ billing_account_id: string }>`
+        select ba.billing_account_id
+        from billing_accounts ba
+        left join lateral (
+          select gpb.bundle_id
+          from billing_plan_assignments bpa
+          inner join billing_plans bpl on bpl.plan_id = bpa.plan_id
+          inner join gate_policy_bundles gpb
+            on gpb.realm_id = ba.realm_id
+           and gpb.bundle_key = coalesce(
+             nullif(bpa.metadata ->> 'gate_bundle_key', ''),
+             nullif(bpl.metadata ->> 'gate_bundle_key', '')
+           )
+           and gpb.status = 'active'
+          where bpa.billing_account_id = ba.billing_account_id
+            and bpa.status = 'active'
+            and bpa.window_start <= ${now}
+            and (bpa.window_end > ${now} or bpa.window_end is null)
+            and bpl.active = true
+            and bpl.kind in ('base', 'addon')
+          order by bpl.priority desc, bpa.assignment_id desc
+          limit 1
+        ) selected on true
+        where ba.realm_id = ${realmId}
+          and ba.current_bundle_id is distinct from selected.bundle_id
+        order by ba.billing_account_id
+        limit ${BUNDLE_RECONCILE_LIMIT}
+      `.execute(trx)
+      return result.rows
+    })
+
+    for (const row of staleAccounts) {
+      await dbHandle.transaction().execute(async (trx) => {
+        await refreshBillingAccountState(trx, String(row.billing_account_id))
+      })
+    }
+
+    return staleAccounts.length
   }
 
   private async runCampaignPhase(dbHandle: Kysely<Database>, realmId: string, now: Date): Promise<void> {

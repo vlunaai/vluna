@@ -282,6 +282,12 @@ type GateBundleSelection = {
   assignmentId: string | null
 }
 
+function compareGateBundleCandidates(a: GateBundleCandidate, b: GateBundleCandidate): number {
+  const priorityDiff = (b.priority ?? 0) - (a.priority ?? 0)
+  if (priorityDiff !== 0) return priorityDiff
+  return String(b.assignment_id ?? '').localeCompare(String(a.assignment_id ?? ''))
+}
+
 async function selectBestGateBundle(
   trx: Transaction<Database>,
   params: { realmId: string; billingAccountId: string; now?: Date; extraCandidates?: GateBundleCandidate[] },
@@ -344,7 +350,7 @@ async function selectBestGateBundle(
   const byKey = new Map<string, GateBundleCandidate>()
   for (const c of candidates) {
     const existing = byKey.get(c.bundle_key)
-    if (!existing || (c.priority ?? 0) > (existing.priority ?? 0)) {
+    if (!existing || compareGateBundleCandidates(c, existing) < 0) {
       byKey.set(c.bundle_key, c)
     }
   }
@@ -363,7 +369,7 @@ async function selectBestGateBundle(
   if (bundleRows.length === 0) return null
   const bundleMap = new Map(bundleRows.map((row) => [String(row.bundle_key), String(row.bundle_id)]))
 
-  const sorted = Array.from(byKey.values()).sort((a, b) => (b.priority ?? 0) - (a.priority ?? 0))
+  const sorted = Array.from(byKey.values()).sort(compareGateBundleCandidates)
   for (const candidate of sorted) {
     const id = bundleMap.get(candidate.bundle_key)
     if (id) {

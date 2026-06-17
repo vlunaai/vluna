@@ -5,7 +5,11 @@ import { setRlsSession } from '../../../db/index.js'
 import type { components as BillingComponents } from '../../../contracts/billing-mgt.js'
 import type { AppRequest } from '../../../types/app-request.js'
 import type { Database } from '../../../types/database.js'
-import { ensureBillingPlanAssignment, upsertBillingPlan } from '../../../services/billing-plan.service.js'
+import {
+  ensureBillingPlanAssignment,
+  refreshBillingAccountState,
+  upsertBillingPlan,
+} from '../../../services/billing-plan.service.js'
 import { allowCrossAccountAccess } from '../../../auth/utils/access.js'
 
 type BillingPlan = BillingComponents['schemas']['BillingPlan']
@@ -432,6 +436,9 @@ export class BillingPlansManagementService {
       await this.replacePlanEntitlements(trx, realmId, id, body?.feature_family_codes, body?.feature_codes)
     }
 
+    // Plan bundle changes can affect many accounts. Keep this API O(1);
+    // grant-binding-sweep reconciles billing_accounts.current_bundle_id asynchronously.
+
     return this.getBillingPlan(req, id)
   }
 
@@ -798,6 +805,8 @@ export class BillingPlansManagementService {
       metadata,
     })
 
+    await refreshBillingAccountState(trx, billingAccountId)
+
     return this.fetchAssignment(trx, realmId, billingAccountId, String(row.assignment_id))
   }
 
@@ -881,6 +890,7 @@ export class BillingPlansManagementService {
         .where('billing_account_id', '=', billingAccountId)
         .where('assignment_id', '=', id)
         .executeTakeFirst()
+      await refreshBillingAccountState(trx, billingAccountId)
     }
 
     return this.fetchAssignment(trx, realmId, billingAccountId, id)
