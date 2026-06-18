@@ -1,5 +1,5 @@
 import type Stripe from 'stripe'
-import { createHash } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { callStripe } from './client.js'
 import type { PaymentProvider, SyncReport, SyncItemNote, ProviderOpContext, CatalogSyncOptions } from '../payment/PaymentProvider.js'
 import type { Database } from '../../types/database.js'
@@ -157,7 +157,7 @@ export class StripePaymentProvider implements PaymentProvider {
       .executeTakeFirst()
     if (existing?.provider_customer_id) return existing.provider_customer_id
 
-    const idempotencyKey = idemKey(['cust1', p.billingAccountId])
+    const idempotencyKey = idemKey(['cust', p.billingAccountId])
     const created: { id: string } = await callStripe(
       () =>
         stripe.customers.create(
@@ -301,18 +301,18 @@ export class StripePaymentProvider implements PaymentProvider {
     if (!db) throw new Error('DB handle missing in RequestContext')
 
     // Pull local catalog
-    const productsQuery = db
+    let productsQuery = db
       .selectFrom('catalog_products')
       .selectAll()
       .where('status', '=', 'active')
-    const pricesQuery = db
+    let pricesQuery = db
       .selectFrom('catalog_prices')
       .selectAll()
       .where('status', '=', 'active')
 
     if (ctx.realmId) {
-      productsQuery.where('realm_id', '=', ctx.realmId)
-      pricesQuery.where('realm_id', '=', ctx.realmId)
+      productsQuery = productsQuery.where('realm_id', '=', ctx.realmId)
+      pricesQuery = pricesQuery.where('realm_id', '=', ctx.realmId)
     }
 
     const products = (await productsQuery.execute()) as LocalProduct[]
@@ -362,9 +362,10 @@ export class StripePaymentProvider implements PaymentProvider {
 	      }
 	      if (!sp) {
 	        if (!dry) {
+          const idempotencyKey = idemKey(['prod1', realmId, lp.catalog_product_id, hashIdempotencyPayload(desired), randomUUID()])
           const created = await callStripe(
             async () => stripe.products.create(desired, {
-              idempotencyKey: idemKey(['prod1', lp.catalog_product_id, hashIdempotencyPayload(desired)]),
+              idempotencyKey,
             }),
             { op: 'products.create', traceId: ctx.traceId },
           )
@@ -508,9 +509,10 @@ export class StripePaymentProvider implements PaymentProvider {
           createParams.recurring = { interval: lpr.recurring_interval, interval_count: lpr.recurring_count || 1 }
         }
         if (!dry) {
+            const idempotencyKey = idemKey(['price', realmId, lpr.catalog_price_id, hashIdempotencyPayload(createParams), randomUUID()])
             const created = await callStripe(
               async () => stripe.prices.create(createParams, {
-                idempotencyKey: idemKey(['price', lpr.catalog_price_id, hashIdempotencyPayload(createParams)]),
+                idempotencyKey,
               }),
               { op: 'prices.create', traceId: ctx.traceId },
             )
