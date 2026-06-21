@@ -8,7 +8,7 @@ import { ServiceAccountGuard } from '../../../auth/guards/service-account.guard.
 import { TokenClaimsGuard } from '../../../auth/guards/token-claims.guard.js'
 import { RealmMembershipGuard } from '../../../auth/guards/realm-membership.guard.js'
 import { PrincipalGuard } from '../../../auth/guards/principal.guard.js'
-import { PrincipalBillingAccountGuard } from '../../../auth/guards/principal-billing-account.guard.js'
+import { BillingAccountGuard } from '../../../auth/guards/billing-account.guard.js'
 import { IdempotencyInterceptor } from '../../../support/idempotency.interceptor.js'
 import { Audit } from '../../../support/audit/audit.decorator.js'
 import type { AppRequest } from '../../../types/app-request.js'
@@ -63,7 +63,7 @@ function parseUuid(value: string, name: string): string {
   TokenClaimsGuard,
   RealmMembershipGuard,
   PrincipalGuard,
-  PrincipalBillingAccountGuard,
+  BillingAccountGuard,
 )
 export class BillingContractsController {
   constructor(@Inject(BillingContractsService) private readonly contractsService: BillingContractsService) {}

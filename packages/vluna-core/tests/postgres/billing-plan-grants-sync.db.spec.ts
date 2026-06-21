@@ -8,6 +8,7 @@ import { prepareDbTestContext } from '../utils/db-setup.js'
 const FIXTURE = path.resolve(__dirname, 'fixtures/billing_plan_grants_sync.sql')
 const realmId = 'realm-test'
 const billingAccountId = '11111111-1111-1111-1111-111111111111'
+const billingUserId = '22222222-2222-2222-2222-222222222222'
 
 describe('billing plan grants reconcile (db)', { tags: ['db'] }, () => {
   let stop: () => Promise<void>
@@ -47,6 +48,7 @@ describe('billing plan grants reconcile (db)', { tags: ['db'] }, () => {
     await seedClient.query(`truncate table billing_plan_assignments cascade`)
     await seedClient.query(`truncate table billing_plans cascade`)
     await seedClient.query(`truncate table grant_programs cascade`)
+    await seedClient.query(`truncate table billing_users cascade`)
     await seedClient.query(`truncate table billing_accounts cascade`)
     await seedClient.query(`truncate table realms cascade`)
 
@@ -54,6 +56,10 @@ describe('billing plan grants reconcile (db)', { tags: ['db'] }, () => {
     await seedClient.query(
       `insert into billing_accounts (billing_account_id, realm_id, billing_principal_id) values ($1, $2, $3)`,
       [billingAccountId, realmId, 'principal-1'],
+    )
+    await seedClient.query(
+      `insert into billing_users (billing_user_id, realm_id, billing_account_id, business_user_id) values ($1, $2, $3, $4)`,
+      [billingUserId, realmId, billingAccountId, 'user-1'],
     )
 
     await seedClient.query(
@@ -90,12 +96,13 @@ describe('billing plan grants reconcile (db)', { tags: ['db'] }, () => {
     const bpaRes = await appClient.query<{ assignment_id: string }>(
       `
       insert into billing_plan_assignments (
-        billing_account_id, plan_id, source_kind, source_ref, window_start, window_end, status, metadata
-      ) values ($1, $2, $3, $4, $5, $6, $7, $8)
+        billing_account_id, billing_user_id, plan_id, source_kind, source_ref, window_start, window_end, status, metadata
+      ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9)
       returning assignment_id
       `,
       [
         billingAccountId,
+        billingUserId,
         billingPlanId,
         'signup.default',
         'signup:1',
@@ -144,8 +151,8 @@ describe('billing plan grants reconcile (db)', { tags: ['db'] }, () => {
     })
 
     const dirtyRes = await seedClient.query<{ metadata: unknown }>(
-      `select metadata from billing_accounts where billing_account_id = $1`,
-      [billingAccountId],
+      `select metadata from billing_users where billing_user_id = $1`,
+      [billingUserId],
     )
     const dirtyMeta = jsonObject(dirtyRes.rows[0].metadata)
     const dirtySwitch = jsonObject(dirtyMeta.grants_switch)
@@ -165,9 +172,10 @@ describe('billing plan grants reconcile (db)', { tags: ['db'] }, () => {
       select source_ref, status, billing_plan_assignment_id
       from grant_assignments
       where billing_account_id = $1 and source_kind = 'billing_plan_assignment'
+        and billing_user_id = $2
       order by assignment_id
       `,
-      [billingAccountId],
+      [billingAccountId, billingUserId],
     )
     expect(gpaRows1.rows.length).toBe(1)
     expect(gpaRows1.rows[0].source_ref).toBe(`bpa:${planAssignmentId}:tpl:key:test.gp-one`)
@@ -182,15 +190,15 @@ describe('billing plan grants reconcile (db)', { tags: ['db'] }, () => {
       `
       select count(*)::text as cnt
       from grant_assignments
-      where billing_account_id = $1 and source_kind = 'billing_plan_assignment'
+      where billing_account_id = $1 and billing_user_id = $2 and source_kind = 'billing_plan_assignment'
       `,
-      [billingAccountId],
+      [billingAccountId, billingUserId],
     )
     expect(Number(gpbRows2.rows[0].cnt)).toBe(1)
 
     const appliedRes = await appClient.query<{ metadata: unknown }>(
-      `select metadata from billing_accounts where billing_account_id = $1`,
-      [billingAccountId],
+      `select metadata from billing_users where billing_user_id = $1`,
+      [billingUserId],
     )
     const appliedMeta = jsonObject(appliedRes.rows[0].metadata)
     const grantsSwitch = jsonObject(appliedMeta.grants_switch)
@@ -237,9 +245,9 @@ describe('billing plan grants reconcile (db)', { tags: ['db'] }, () => {
       `
       select status, window_end
       from grant_assignments
-      where billing_account_id = $1 and source_kind = 'billing_plan_assignment'
+      where billing_account_id = $1 and billing_user_id = $2 and source_kind = 'billing_plan_assignment'
       `,
-      [billingAccountId],
+      [billingAccountId, billingUserId],
     )
 
     expect(canceled.rows.length).toBe(1)

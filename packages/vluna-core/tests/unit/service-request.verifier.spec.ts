@@ -10,12 +10,13 @@ import {
 
 const SECRET = Buffer.from('super-secret')
 const GOLDEN_DIGEST = 'sha-256=:QGLtr3UPuAdOfoPgyQKMlOMkaKi28WFHdDKO8EUVD5M=:'
-const GOLDEN_SIG = '2NwpmPjmwsNjlDzBkBHcL14MzFxcfblv1DL/0fhz7dI='
+const GOLDEN_SIG = 'ocEMbrstTPyyjUBiOnLr8oNM2Zj0vAhnyB/kc6bMkkc='
 const baseHeaders = {
   'content-type': 'application/json; charset=utf-8',
   'x-realm-id': 'realm1',
   'x-billing-account-id': 'ba1',
   'x-principal-id': 'principal1',
+  'x-user-id': 'user1',
   'idempotency-key': 'idem-1',
 }
 
@@ -40,6 +41,7 @@ function makeReq(body: object, opts?: Partial<MinimalIncomingRequest> & { ts?: s
     realmId: baseHeaders['x-realm-id'],
     billingAccountId: baseHeaders['x-billing-account-id'],
     principalId: baseHeaders['x-principal-id'],
+    userId: baseHeaders['x-user-id'],
     idempotencyKey: baseHeaders['idempotency-key'],
   }) as string
 
@@ -80,9 +82,10 @@ describe('service-request.verifier canonical + digest', { tags: ['unit'] }, () =
       realmId: 'r',
       billingAccountId: 'b',
       principalId: 'p',
+      userId: 'u',
       idempotencyKey: 'i',
     })
-    expect(canonical.split('\n')).toHaveLength(10)
+    expect(canonical.split('\n')).toHaveLength(12)
   })
 
   it('throws on unsupported algorithm', () => {
@@ -97,6 +100,7 @@ describe('service-request.verifier canonical + digest', { tags: ['unit'] }, () =
         realmId: '',
         billingAccountId: '',
         principalId: '',
+        userId: '',
         idempotencyKey: '',
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         algorithm: 'HMAC-SHA1' as any,
@@ -118,6 +122,7 @@ describe('service-request.verifier canonical + digest', { tags: ['unit'] }, () =
       realmId: baseHeaders['x-realm-id'],
       billingAccountId: baseHeaders['x-billing-account-id'],
       principalId: baseHeaders['x-principal-id'],
+      userId: baseHeaders['x-user-id'],
       idempotencyKey: baseHeaders['idempotency-key'],
     })
     const sig = signServiceRequest({
@@ -132,10 +137,11 @@ describe('service-request.verifier canonical + digest', { tags: ['unit'] }, () =
       realmId: baseHeaders['x-realm-id'],
       billingAccountId: baseHeaders['x-billing-account-id'],
       principalId: baseHeaders['x-principal-id'],
+      userId: baseHeaders['x-user-id'],
       idempotencyKey: baseHeaders['idempotency-key'],
     })
     expect(sig).toBe(GOLDEN_SIG)
-    expect(canonical.split('\n')).toHaveLength(10)
+    expect(canonical.split('\n')).toHaveLength(12)
   })
 })
 
@@ -146,6 +152,8 @@ describe('service-request.verifier end-to-end verification', { tags: ['unit'] },
     expect(res.ok).toBe(true)
     if (res.ok) {
       expect(res.verified.realmId).toBe('realm1')
+      expect(res.verified.principalId).toBe('principal1')
+      expect(res.verified.userId).toBe('user1')
       expect(res.canonical).toContain('content-digest')
     }
   })

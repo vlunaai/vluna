@@ -7,7 +7,6 @@ import { GrantBindingEnrollmentService } from '../services/grant-binding-enrollm
 import { SettlementSweepTask } from '../tasks/settlement-sweep.task.js'
 import { OutcomeBillingSweepTask } from '../tasks/outcome-billing-sweep.task.js'
 import { BillingCloseoutSweepTask } from '../tasks/billing-closeout-sweep.task.js'
-import { SeatUsageSweepTask } from '../tasks/seat-usage-sweep.task.js'
 import { GateFeatureModule } from '../features/gate/gate.feature.module.js'
 import { BillingManagementModule } from '../features/billing/billing.management.module.js'
 import { RUNTIME_ARGS, type RuntimeArgs } from '../platform/runtime-args.js'
@@ -21,7 +20,6 @@ import { selectPeriodicTasksByName } from '../scheduler/task-filter.js'
     SettlementSweepTask,
     OutcomeBillingSweepTask,
     BillingCloseoutSweepTask,
-    SeatUsageSweepTask,
     GrantBindingEnrollmentService,
     {
       provide: PERIODIC_TASKS_ALL,
@@ -31,9 +29,8 @@ import { selectPeriodicTasksByName } from '../scheduler/task-filter.js'
         settlementTask: SettlementSweepTask,
         outcomeTask: OutcomeBillingSweepTask,
         closeoutTask: BillingCloseoutSweepTask,
-        seatUsageTask: SeatUsageSweepTask,
-      ) => [bindingTask, expiryTask, settlementTask, outcomeTask, closeoutTask, seatUsageTask],
-      inject: [GrantBindingSweepTask, GrantExpirySweepTask, SettlementSweepTask, OutcomeBillingSweepTask, BillingCloseoutSweepTask, SeatUsageSweepTask],
+      ) => [bindingTask, expiryTask, settlementTask, outcomeTask, closeoutTask],
+      inject: [GrantBindingSweepTask, GrantExpirySweepTask, SettlementSweepTask, OutcomeBillingSweepTask, BillingCloseoutSweepTask],
     },
     {
       provide: PERIODIC_TASKS,

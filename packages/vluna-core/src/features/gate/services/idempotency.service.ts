@@ -11,6 +11,7 @@ export type IdempotencyEnvelopeRow = {
   operation: string
   scope_type: string
   scope_id: string | null
+  billing_user_id: string | null
   billing_account_id: string | null
   key: string
   request_hash: string
@@ -25,9 +26,10 @@ export type IdempotencyEnvelopeRow = {
 
 type AcquireParams = {
   realmId: string
+  billingUserId?: string | null
   billingAccountId?: string | null
   operation: 'authorize' | 'commit' | 'cancel' | string
-  scopeType: 'lease' | 'account' | 'none' | string
+  scopeType: 'lease' | 'account' | 'user' | 'none' | string
   scopeId?: string | null
   key: string
   requestHash: string
@@ -50,6 +52,7 @@ export class GateIdempotencyService {
     params: AcquireParams,
   ): Promise<{ envelope: IdempotencyEnvelopeRow; isNew: boolean }> {
     const scopeId = params.scopeId ?? null
+    const billingUserId = params.billingUserId ?? null
     const billingAccountId = params.billingAccountId ?? null
     const metadata = params.metadata ?? {}
     const requestSnapshot = params.requestSnapshot ?? null
@@ -62,6 +65,7 @@ export class GateIdempotencyService {
         operation: params.operation,
         scope_type: params.scopeType,
         scope_id: scopeId,
+        billing_user_id: billingUserId,
         billing_account_id: billingAccountId,
         key: params.key,
         request_hash: params.requestHash,
@@ -86,6 +90,7 @@ export class GateIdempotencyService {
         operation,
         scope_type,
         scope_id,
+        billing_user_id,
         billing_account_id,
         key,
         request_hash,
@@ -102,6 +107,8 @@ export class GateIdempotencyService {
         AND operation = ${params.operation}
         AND scope_type = ${params.scopeType}
         AND COALESCE(scope_id, '') = COALESCE(${scopeId}, '')
+        AND COALESCE(billing_user_id::text, '') = COALESCE(${billingUserId}, '')
+        AND COALESCE(billing_account_id::text, '') = COALESCE(${billingAccountId}, '')
         AND key = ${params.key}
       FOR UPDATE
     `
@@ -173,6 +180,7 @@ export class GateIdempotencyService {
       scope_type: row.scope_type,
       scope_id: row.scope_id ?? null,
       billing_account_id: row.billing_account_id ?? null,
+      billing_user_id: row.billing_user_id ?? null,
       key: row.key,
       request_hash: row.request_hash,
       status: row.status,

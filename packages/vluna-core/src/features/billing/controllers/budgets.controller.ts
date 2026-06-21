@@ -4,7 +4,7 @@ import { TokenClaimsGuard } from '../../../auth/guards/token-claims.guard.js'
 import { Scopes } from '../../../auth/decorators/scopes.decorator.js'
 import { BILLING_SCOPES } from '../../../auth/constants/scopes.constants.js'
 import { PrincipalGuard } from '../../../auth/guards/principal.guard.js'
-import { PrincipalBillingAccountGuard } from '../../../auth/guards/principal-billing-account.guard.js'
+import { ServiceRuntimeUserGuard } from '../../../auth/guards/service-runtime-user.guard.js'
 import { IdempotencyInterceptor } from '../../../support/idempotency.interceptor.js'
 import type { AppRequest } from '../../../types/app-request.js'
 import type { operations as BillingOps } from '../../../contracts/billing.js'
@@ -13,7 +13,6 @@ import { BudgetsService } from '../services/budgets.service.js'
 import { okEnvelope } from '../../../common/envelope.js'
 import { AuthRequiredGuard } from '../../../auth/guards/auth-required.guard.js'
 import { ServiceAuthGuard } from '../../../auth/guards/service-auth.guard.js'
-import { ServiceAccountGuard } from '../../../auth/guards/service-account.guard.js'
 import { RealmMembershipGuard } from '../../../auth/guards/realm-membership.guard.js'
 
 type ListBudgetsQuery = QueryParams<BillingOps, 'listBudgets'>
@@ -56,7 +55,7 @@ abstract class BudgetsControllerBase {
 }
 
 @Controller('budgets')
-@UseGuards(RealmGuard, TokenClaimsGuard, RealmMembershipGuard, PrincipalGuard, PrincipalBillingAccountGuard)
+@UseGuards(RealmGuard, TokenClaimsGuard, RealmMembershipGuard, PrincipalGuard, ServiceRuntimeUserGuard)
 export class BudgetsController extends BudgetsControllerBase {
   @Get()
   @Scopes(BILLING_SCOPES.READ_ALL)
@@ -93,7 +92,7 @@ export class BudgetsController extends BudgetsControllerBase {
 }
 
 @Controller('budgets')
-@UseGuards(RealmGuard, AuthRequiredGuard, ServiceAuthGuard, TokenClaimsGuard, RealmMembershipGuard, ServiceAccountGuard, PrincipalGuard, PrincipalBillingAccountGuard)
+@UseGuards(RealmGuard, AuthRequiredGuard, ServiceAuthGuard, TokenClaimsGuard, RealmMembershipGuard, PrincipalGuard, ServiceRuntimeUserGuard)
 export class BudgetsServiceController extends BudgetsControllerBase {
   @Get()
   async listBudgets(@Req() req: AppRequest, @Query() query: ListBudgetsQuery): Promise<ListBudgets200> {

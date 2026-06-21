@@ -111,6 +111,7 @@ END$$;
 CREATE TABLE IF NOT EXISTS billing_events (
   event_id            uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   realm_id            text        NOT NULL REFERENCES realms(realm_id) ON DELETE RESTRICT,
+  billing_user_id     uuid        NOT NULL REFERENCES billing_users(billing_user_id) ON DELETE CASCADE,
   billing_account_id  uuid        NOT NULL REFERENCES billing_accounts(billing_account_id) ON DELETE CASCADE,
   semantic_kind       text        NOT NULL CHECK (semantic_kind IN ('activity','outcome')),
   occurred_at         timestamptz NOT NULL,
@@ -118,20 +119,28 @@ CREATE TABLE IF NOT EXISTS billing_events (
   subject_ref         text        NULL,
   payload             jsonb       NOT NULL DEFAULT '{}'::jsonb,
   request_hash        text        NOT NULL,
-  created_at          timestamptz NOT NULL DEFAULT now()
+  created_at          timestamptz NOT NULL DEFAULT now(),
+  CONSTRAINT fk_be_user_account
+    FOREIGN KEY (billing_user_id, billing_account_id)
+    REFERENCES billing_users(billing_user_id, billing_account_id)
+    ON DELETE CASCADE
 );
 
--- Idempotency: per-account uniqueness
+-- Idempotency: per-user uniqueness
 DO $$
 BEGIN
   IF NOT EXISTS (
-    SELECT 1 FROM pg_indexes WHERE tablename='billing_events' AND indexname='ux_billing_events_ba_hash'
+    SELECT 1 FROM pg_indexes WHERE tablename='billing_events' AND indexname='ux_billing_events_bu_hash'
   ) THEN
-    CREATE UNIQUE INDEX ux_billing_events_ba_hash ON billing_events(billing_account_id, request_hash);
+    CREATE UNIQUE INDEX ux_billing_events_bu_hash ON billing_events(billing_user_id, request_hash);
   END IF;
 END$$;
 
 -- High-frequency query path
+CREATE INDEX IF NOT EXISTS idx_billing_events_user_time
+  ON billing_events (billing_user_id, occurred_at);
+CREATE INDEX IF NOT EXISTS idx_billing_events_user_kind_time
+  ON billing_events (billing_user_id, semantic_kind, occurred_at);
 CREATE INDEX IF NOT EXISTS idx_billing_events_account_time
   ON billing_events (billing_account_id, occurred_at);
 CREATE INDEX IF NOT EXISTS idx_billing_events_account_kind_time
@@ -146,14 +155,16 @@ BEGIN
   BEGIN EXECUTE 'ALTER TABLE billing_events ENABLE ROW LEVEL SECURITY'; EXCEPTION WHEN others THEN NULL; END;
 
   BEGIN
-    CREATE POLICY billing_events_account_read ON billing_events FOR SELECT USING (
-      billing_events.billing_account_id = get_current_billing_account_id()
+    CREATE POLICY billing_events_user_read ON billing_events FOR SELECT USING (
+      billing_events.billing_user_id = get_current_billing_user_id()
+      AND billing_events.billing_account_id = get_current_billing_account_id()
     );
   EXCEPTION WHEN duplicate_object THEN NULL; END;
 
   BEGIN
-    CREATE POLICY billing_events_account_write ON billing_events FOR INSERT WITH CHECK (
-      billing_events.billing_account_id = get_current_billing_account_id()
+    CREATE POLICY billing_events_user_write ON billing_events FOR INSERT WITH CHECK (
+      billing_events.billing_user_id = get_current_billing_user_id()
+      AND billing_events.billing_account_id = get_current_billing_account_id()
     );
   EXCEPTION WHEN duplicate_object THEN NULL; END;
 
@@ -195,26 +206,28 @@ CREATE INDEX IF NOT EXISTS idx_bel_key   ON billing_event_labels (label_key);
 CREATE INDEX IF NOT EXISTS idx_bel_text  ON billing_event_labels (label_key, value_text);
 CREATE INDEX IF NOT EXISTS idx_bel_uuid  ON billing_event_labels (label_key, value_uuid);
 
--- RLS for labels based on parent event's account scope
+-- RLS for labels based on parent event's runtime user scope
 DO $$
 BEGIN
   BEGIN EXECUTE 'ALTER TABLE billing_event_labels ENABLE ROW LEVEL SECURITY'; EXCEPTION WHEN others THEN NULL; END;
-  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE schemaname = current_schema() AND tablename='billing_event_labels' AND policyname='bel_account_read') THEN
-    CREATE POLICY bel_account_read ON billing_event_labels
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE schemaname = current_schema() AND tablename='billing_event_labels' AND policyname='bel_user_read') THEN
+    CREATE POLICY bel_user_read ON billing_event_labels
       USING (
         EXISTS (
           SELECT 1 FROM billing_events e
           WHERE e.event_id = billing_event_labels.event_id
+            AND e.billing_user_id = get_current_billing_user_id()
             AND e.billing_account_id = get_current_billing_account_id()
         )
       );
   END IF;
-  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE schemaname = current_schema() AND tablename='billing_event_labels' AND policyname='bel_account_insert') THEN
-    CREATE POLICY bel_account_insert ON billing_event_labels FOR INSERT
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE schemaname = current_schema() AND tablename='billing_event_labels' AND policyname='bel_user_insert') THEN
+    CREATE POLICY bel_user_insert ON billing_event_labels FOR INSERT
       WITH CHECK (
         EXISTS (
           SELECT 1 FROM billing_events e
             WHERE e.event_id = billing_event_labels.event_id
+            AND e.billing_user_id = get_current_billing_user_id()
             AND e.billing_account_id = get_current_billing_account_id()
         )
       );
@@ -228,6 +241,7 @@ END$$;
 CREATE TABLE IF NOT EXISTS billing_event_processing (
   billing_event_id     uuid NOT NULL REFERENCES billing_events(event_id) ON DELETE CASCADE,
   realm_id             text   NOT NULL REFERENCES realms(realm_id) ON DELETE RESTRICT,
+  billing_user_id      uuid   NOT NULL REFERENCES billing_users(billing_user_id) ON DELETE CASCADE,
   billing_account_id   uuid   NOT NULL REFERENCES billing_accounts(billing_account_id) ON DELETE CASCADE,
   policy_id            text   NOT NULL,
   policy_version       text   NOT NULL,
@@ -242,7 +256,11 @@ CREATE TABLE IF NOT EXISTS billing_event_processing (
   result_json          jsonb  NOT NULL DEFAULT '{}'::jsonb,
   created_at           timestamptz NOT NULL DEFAULT now(),
   updated_at           timestamptz NOT NULL DEFAULT now(),
-  UNIQUE (billing_event_id, policy_id, policy_version)
+  UNIQUE (billing_event_id, policy_id, policy_version),
+  CONSTRAINT fk_bep_user_account
+    FOREIGN KEY (billing_user_id, billing_account_id)
+    REFERENCES billing_users(billing_user_id, billing_account_id)
+    ON DELETE CASCADE
 );
 
 CREATE INDEX IF NOT EXISTS ix_bep_pending
@@ -252,33 +270,38 @@ CREATE INDEX IF NOT EXISTS ix_bep_realm_pending
   ON billing_event_processing (realm_id, status, next_retry_at, billing_event_id)
   WHERE status IN ('pending','failed');
 CREATE INDEX IF NOT EXISTS ix_bep_ba ON billing_event_processing (billing_account_id);
+CREATE INDEX IF NOT EXISTS ix_bep_bu ON billing_event_processing (billing_user_id);
 
--- RLS for billing_event_processing (account-scoped + realm-admin).
+-- RLS for billing_event_processing (runtime user-scoped + realm-admin).
 DO $$
 BEGIN
   BEGIN EXECUTE 'ALTER TABLE billing_event_processing ENABLE ROW LEVEL SECURITY'; EXCEPTION WHEN others THEN NULL; END;
-  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE schemaname = current_schema() AND tablename='billing_event_processing' AND policyname='bep_account_read') THEN
-    CREATE POLICY bep_account_read ON billing_event_processing
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE schemaname = current_schema() AND tablename='billing_event_processing' AND policyname='bep_user_read') THEN
+    CREATE POLICY bep_user_read ON billing_event_processing
       USING (
-        billing_event_processing.billing_account_id = get_current_billing_account_id()
+        billing_event_processing.billing_user_id = get_current_billing_user_id()
+        AND billing_event_processing.billing_account_id = get_current_billing_account_id()
         AND billing_event_processing.realm_id = current_setting('app.realm_id', true)
       );
   END IF;
-  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE schemaname = current_schema() AND tablename='billing_event_processing' AND policyname='bep_account_insert') THEN
-    CREATE POLICY bep_account_insert ON billing_event_processing FOR INSERT
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE schemaname = current_schema() AND tablename='billing_event_processing' AND policyname='bep_user_insert') THEN
+    CREATE POLICY bep_user_insert ON billing_event_processing FOR INSERT
       WITH CHECK (
-        billing_event_processing.billing_account_id = get_current_billing_account_id()
+        billing_event_processing.billing_user_id = get_current_billing_user_id()
+        AND billing_event_processing.billing_account_id = get_current_billing_account_id()
         AND billing_event_processing.realm_id = current_setting('app.realm_id', true)
       );
   END IF;
-  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE schemaname = current_schema() AND tablename='billing_event_processing' AND policyname='bep_account_update') THEN
-    CREATE POLICY bep_account_update ON billing_event_processing FOR UPDATE
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE schemaname = current_schema() AND tablename='billing_event_processing' AND policyname='bep_user_update') THEN
+    CREATE POLICY bep_user_update ON billing_event_processing FOR UPDATE
       USING (
-        billing_event_processing.billing_account_id = get_current_billing_account_id()
+        billing_event_processing.billing_user_id = get_current_billing_user_id()
+        AND billing_event_processing.billing_account_id = get_current_billing_account_id()
         AND billing_event_processing.realm_id = current_setting('app.realm_id', true)
       )
       WITH CHECK (
-        billing_event_processing.billing_account_id = get_current_billing_account_id()
+        billing_event_processing.billing_user_id = get_current_billing_user_id()
+        AND billing_event_processing.billing_account_id = get_current_billing_account_id()
         AND billing_event_processing.realm_id = current_setting('app.realm_id', true)
       );
   END IF;
@@ -381,6 +404,7 @@ END$$;
 
 CREATE TABLE IF NOT EXISTS billing_event_ratings (
   realm_id             text   NOT NULL REFERENCES realms(realm_id) ON DELETE RESTRICT,
+  billing_user_id      uuid   NOT NULL REFERENCES billing_users(billing_user_id) ON DELETE CASCADE,
   billing_account_id   uuid   NOT NULL REFERENCES billing_accounts(billing_account_id) ON DELETE CASCADE,
   billing_event_id     uuid NOT NULL REFERENCES billing_events(event_id) ON DELETE CASCADE,
   rating_id            uuid NOT NULL REFERENCES billing_ratings(rating_id) ON DELETE RESTRICT,
@@ -391,13 +415,18 @@ CREATE TABLE IF NOT EXISTS billing_event_ratings (
   engine_run_id        text   NULL,
   idempotency_key      text   NULL,
   created_at           timestamptz NOT NULL DEFAULT now(),
-  PRIMARY KEY (billing_event_id, rating_id, link_kind)
+  PRIMARY KEY (billing_event_id, rating_id, link_kind),
+  CONSTRAINT fk_ber_user_account
+    FOREIGN KEY (billing_user_id, billing_account_id)
+    REFERENCES billing_users(billing_user_id, billing_account_id)
+    ON DELETE CASCADE
 );
 
 CREATE INDEX IF NOT EXISTS ix_ber_event ON billing_event_ratings (billing_event_id);
 CREATE INDEX IF NOT EXISTS ix_ber_rating ON billing_event_ratings (rating_id);
 CREATE INDEX IF NOT EXISTS ix_ber_policy ON billing_event_ratings (policy_id, policy_version);
 CREATE INDEX IF NOT EXISTS ix_ber_ba ON billing_event_ratings (billing_account_id);
+CREATE INDEX IF NOT EXISTS ix_ber_bu ON billing_event_ratings (billing_user_id);
 CREATE INDEX IF NOT EXISTS ix_ber_realm ON billing_event_ratings (realm_id);
 CREATE UNIQUE INDEX IF NOT EXISTS ux_ber_intent
   ON billing_event_ratings (billing_event_id, policy_id, policy_version, output_index, link_kind);
@@ -405,13 +434,14 @@ CREATE INDEX IF NOT EXISTS ix_ber_idem
   ON billing_event_ratings (idempotency_key)
   WHERE idempotency_key IS NOT NULL;
 
--- RLS for billing_event_ratings (account-scoped).
+-- RLS for billing_event_ratings (runtime user-scoped).
 DO $$
 DECLARE
   expr text;
 BEGIN
   BEGIN EXECUTE 'ALTER TABLE billing_event_ratings ENABLE ROW LEVEL SECURITY'; EXCEPTION WHEN others THEN NULL; END;
-  expr := 'billing_event_ratings.billing_account_id = get_current_billing_account_id()
+  expr := 'billing_event_ratings.billing_user_id = get_current_billing_user_id()
+           AND billing_event_ratings.billing_account_id = get_current_billing_account_id()
            AND billing_event_ratings.realm_id = current_setting(''app.realm_id'', true)';
   BEGIN EXECUTE format('CREATE POLICY %I ON %I FOR SELECT USING (%s)', 'ber_read', 'billing_event_ratings', expr); EXCEPTION WHEN duplicate_object THEN NULL; END;
   BEGIN EXECUTE format('CREATE POLICY %I ON %I FOR INSERT WITH CHECK (%s)', 'ber_insert', 'billing_event_ratings', expr); EXCEPTION WHEN duplicate_object THEN NULL; END;

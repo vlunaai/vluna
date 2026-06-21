@@ -21,6 +21,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/billing-accounts/{billing_account_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Update billing account administration settings */
+        patch: operations["updateBillingAccount"];
+        trace?: never;
+    };
+    "/billing-accounts/{billing_account_id}/seat-summary": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get billing account seat capacity and usage */
+        get: operations["getBillingAccountSeatSummary"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/billing-accounts/{billing_account_id}/billing-details": {
         parameters: {
             query?: never;
@@ -36,6 +70,127 @@ export interface paths {
         head?: never;
         /** Update billing account billing details (masked response) */
         patch: operations["updateBillingAccountBillingDetails"];
+        trace?: never;
+    };
+    "/billing-accounts/{billing_account_id}/users": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List billing users for a billing account */
+        get: operations["listBillingUsers"];
+        put?: never;
+        /** Create or link a billing user under a billing account */
+        post: operations["createBillingUser"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/billing-users/{billing_user_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get a billing user */
+        get: operations["getBillingUser"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Update a billing user */
+        patch: operations["updateBillingUser"];
+        trace?: never;
+    };
+    "/billing-users/{billing_user_id}/disable": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Disable a billing user */
+        post: operations["disableBillingUser"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/billing-users/{billing_user_id}/restore": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Restore a disabled billing user */
+        post: operations["restoreBillingUser"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/billing-users/{billing_user_id}/summary": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get a billing user admin summary */
+        get: operations["getBillingUserSummary"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/billing-users/{billing_user_id}/wallet": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get a billing user admin wallet snapshot */
+        get: operations["getBillingUserWallet"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/billing-users/{billing_user_id}/activity": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List recent billing user activity */
+        get: operations["listBillingUserActivity"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/contracts": {
@@ -632,12 +787,14 @@ export interface components {
             feature_code?: string;
             counter_key?: string;
             params?: components["schemas"]["GatePolicyParams"];
-            billing_feature_code?: string;
-            billing_meter_code?: string;
-            billing_mode?: string;
         } & {
             [key: string]: unknown;
         };
+        /**
+         * @description Counter subject scope for a gate quota/rate policy.
+         * @enum {string}
+         */
+        GatePolicySubjectScope: "user" | "account";
         BillingPeriodOverride: {
             billing_mode?: string;
             issue_anchor?: string;
@@ -649,22 +806,55 @@ export interface components {
         } & {
             [key: string]: unknown;
         };
-        /** @description Assignment-level runtime overrides. */
+        /** @description Assignment-level audit/source annotations and billing overrides. Runtime gate bundle selection comes from plan/catalog metadata, not assignment metadata. */
         BillingPlanAssignmentMetadata: {
-            gate_bundle_key?: string;
             billing?: components["schemas"]["BillingOverrides"];
         } & {
             [key: string]: unknown;
         };
+        /**
+         * @description Commercial assignment scope. Account assignments may contribute account and inherited user policies; user assignments only affect that billing user.
+         * @enum {string}
+         */
+        BillingPlanAssignmentScope: "account" | "user";
         BillingAccount: {
             /** Format: uuid */
             billing_account_id: string;
             billing_principal_id: string;
-            current_bundle_id?: string | null;
+            /** @description Active billing-user seat capacity. Null means unlimited. */
+            seat_limit: number | null;
+            seat_limit_source: string | null;
+            /** Format: date-time */
+            seat_limit_updated_at: string | null;
+            seat_summary?: components["schemas"]["BillingAccountSeatSummary"] | null;
             billing_details?: components["schemas"]["BillingAccountBillingDetailsMasked"] | null;
             metadata: components["schemas"]["BillingAccountMetadata"];
             /** Format: date-time */
             created_at: string;
+        };
+        BillingAccountUpdateRequest: {
+            /** @description Active billing-user seat capacity. Null means unlimited. */
+            seat_limit: number | null;
+        };
+        BillingAccountSeatSummary: {
+            /** Format: uuid */
+            billing_account_id: string;
+            seat_limit: number | null;
+            seat_limit_source: string | null;
+            /** Format: date-time */
+            seat_limit_updated_at: string | null;
+            active_user_count: number;
+            disabled_user_count: number;
+            deleted_user_count: number;
+            /** @description Remaining active seats. Null means unlimited. */
+            available_seats: number | null;
+            over_limit: boolean;
+        };
+        BillingAccountEnvelope: components["schemas"]["EnvelopeBase"] & {
+            data: components["schemas"]["BillingAccount"];
+        };
+        BillingAccountSeatSummaryEnvelope: components["schemas"]["EnvelopeBase"] & {
+            data: components["schemas"]["BillingAccountSeatSummary"];
         };
         BillingAccountList: {
             items?: components["schemas"]["BillingAccount"][];
@@ -723,6 +913,126 @@ export interface components {
         };
         BillingAccountBillingDetailsEnvelope: components["schemas"]["EnvelopeBase"] & {
             data?: components["schemas"]["BillingAccountBillingDetailsMasked"];
+        };
+        /** @enum {string} */
+        BillingUserStatus: "active" | "disabled" | "deleted";
+        /** @description User-scoped display annotations and operational metadata. */
+        BillingUserMetadata: components["schemas"]["MetadataObject"];
+        BillingUser: {
+            /** Format: uuid */
+            billing_user_id: string;
+            /** Format: uuid */
+            billing_account_id: string;
+            billing_principal_id: string;
+            /** @description Internal name for the external product user identifier. */
+            business_user_id: string;
+            /** @description External product user identifier under the billing account. */
+            user_id: string;
+            status: components["schemas"]["BillingUserStatus"];
+            display_name?: string | null;
+            email?: string | null;
+            metadata: components["schemas"]["BillingUserMetadata"];
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            updated_at: string;
+        };
+        BillingUserCreateRequest: {
+            /** @description External product user identifier under the billing account. */
+            user_id: string;
+            display_name?: string | null;
+            email?: string | null;
+            metadata?: components["schemas"]["BillingUserMetadata"];
+        };
+        BillingUserUpdateRequest: {
+            display_name?: string | null;
+            email?: string | null;
+            status?: components["schemas"]["BillingUserStatus"];
+            metadata?: components["schemas"]["BillingUserMetadata"];
+        };
+        BillingUserList: {
+            items?: components["schemas"]["BillingUser"][];
+            next_cursor?: string | null;
+        };
+        BillingUserEnvelope: components["schemas"]["EnvelopeBase"] & {
+            data?: components["schemas"]["BillingUser"];
+        };
+        BillingUserListEnvelope: components["schemas"]["EnvelopeBase"] & {
+            data?: components["schemas"]["BillingUserList"];
+        };
+        BillingUserWalletGrant: {
+            /** Format: uuid */
+            grant_id: string;
+            grant_program_code?: string | null;
+            kind: string;
+            status: string;
+            amount_xusd: string;
+            remaining_xusd: string;
+            available_xusd: string;
+            /** Format: date-time */
+            window_start?: string | null;
+            /** Format: date-time */
+            window_end?: string | null;
+        };
+        BillingUserWallet: {
+            /** Format: uuid */
+            billing_user_id: string;
+            /** Format: uuid */
+            billing_account_id: string;
+            /** Format: date-time */
+            as_of: string;
+            ledger_balance_xusd: string;
+            grant_total_xusd: string;
+            grant_remaining_xusd: string;
+            grant_available_xusd: string;
+            outstanding_balance_xusd: string;
+            grants: components["schemas"]["BillingUserWalletGrant"][];
+        };
+        BillingUserWalletEnvelope: components["schemas"]["EnvelopeBase"] & {
+            data?: components["schemas"]["BillingUserWallet"];
+        };
+        BillingUserSummaryUsage: {
+            amount_xusd: string;
+            cost_xusd: string;
+            margin_xusd: string;
+            commit_count: number;
+        };
+        BillingUserSummaryCounts: {
+            active: number;
+            total: number;
+        };
+        BillingUserSummary: {
+            user: components["schemas"]["BillingUser"];
+            wallet: components["schemas"]["BillingUserWallet"];
+            grants: components["schemas"]["BillingUserSummaryCounts"];
+            grant_assignments: components["schemas"]["BillingUserSummaryCounts"];
+            budgets: components["schemas"]["BillingUserSummaryCounts"];
+            usage_30d: components["schemas"]["BillingUserSummaryUsage"];
+            /** Format: date-time */
+            last_activity_at?: string | null;
+        };
+        BillingUserSummaryEnvelope: components["schemas"]["EnvelopeBase"] & {
+            data?: components["schemas"]["BillingUserSummary"];
+        };
+        /** @enum {string} */
+        BillingUserActivityKind: "event" | "rating" | "allocation" | "grant" | "ledger_entry" | "budget";
+        BillingUserActivityItem: {
+            kind: components["schemas"]["BillingUserActivityKind"];
+            activity_id: string;
+            /** Format: date-time */
+            occurred_at: string;
+            title: string;
+            status?: string | null;
+            amount_xusd?: string | null;
+            feature_code?: string | null;
+            metadata: components["schemas"]["MetadataObject"];
+        };
+        BillingUserActivityList: {
+            items?: components["schemas"]["BillingUserActivityItem"][];
+            next_cursor?: string | null;
+        };
+        BillingUserActivityListEnvelope: components["schemas"]["EnvelopeBase"] & {
+            data?: components["schemas"]["BillingUserActivityList"];
         };
         BillingContract: {
             /** Format: uuid */
@@ -1200,7 +1510,8 @@ export interface components {
             name: string | null;
             feature_code: string;
             /** @enum {string} */
-            kind: "rate" | "quota" | "seats";
+            kind: "rate" | "quota";
+            subject_scope: components["schemas"]["GatePolicySubjectScope"];
             unit: string;
             window_sec: number;
             limit_count?: string | null;
@@ -1219,7 +1530,8 @@ export interface components {
             name: string | null;
             feature_code: string;
             /** @enum {string} */
-            kind: "rate" | "quota" | "seats";
+            kind: "rate" | "quota";
+            subject_scope: components["schemas"]["GatePolicySubjectScope"];
             unit: string;
             window_sec: number;
             limit_count?: string | null;
@@ -1236,7 +1548,8 @@ export interface components {
             name?: string | null;
             feature_code?: string;
             /** @enum {string} */
-            kind?: "rate" | "quota" | "seats";
+            kind?: "rate" | "quota";
+            subject_scope?: components["schemas"]["GatePolicySubjectScope"];
             unit?: string;
             window_sec?: number;
             limit_count?: string | null;
@@ -1309,6 +1622,8 @@ export interface components {
         BillingPlanAssignment: {
             assignment_id: string;
             billing_account_id: string;
+            assignment_scope: components["schemas"]["BillingPlanAssignmentScope"];
+            billing_user_id?: string | null;
             plan_id: string;
             plan_code: string;
             subscription_item_id?: string | null;
@@ -1329,6 +1644,8 @@ export interface components {
         };
         BillingPlanAssignmentCreateRequest: {
             billing_account_id: string;
+            assignment_scope: components["schemas"]["BillingPlanAssignmentScope"];
+            billing_user_id?: string | null;
             plan_id: string;
             subscription_item_id?: string | null;
             /** @enum {string} */
@@ -1443,13 +1760,12 @@ export interface operations {
                 q?: string;
                 billing_account_id?: string[];
                 billing_principal_id?: string;
-                current_bundle_id?: string;
                 created_after?: string;
                 created_before?: string;
                 sort_by?: "created_at" | "billing_account_id";
                 sort_order?: "asc" | "desc";
-                /** @description Optional expansions. Use `billing_details` to include masked billing details. */
-                expand?: "billing_details"[];
+                /** @description Optional expansions. Use `billing_details` to include masked billing details and `seat_summary` to include active seat usage. */
+                expand?: ("billing_details" | "seat_summary")[];
             };
             header: {
                 /** @description Realm identifier for the project. Send it as X-Realm-Id. */
@@ -1475,6 +1791,77 @@ export interface operations {
             };
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
+        };
+    };
+    updateBillingAccount: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Realm identifier for the project. Send it as X-Realm-Id. */
+                "X-Realm-Id": components["parameters"]["RealmIDHeader"];
+                /** @description Optional admin flag to enable realm-wide RLS for authorized callers. */
+                "X-Realm-Admin"?: components["parameters"]["RealmAdminHeader"];
+                /** @description Required for all write operations. Repeating the same route + key + body replays the original response for about 24 hours; conflicting bodies return 409. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKeyRequired"];
+                /** @description Optional request correlation ID. The server may echo or override it. */
+                "X-Request-Id"?: components["parameters"]["XRequestId"];
+            };
+            path: {
+                billing_account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BillingAccountUpdateRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BillingAccountEnvelope"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            422: components["responses"]["UnprocessableEntity"];
+        };
+    };
+    getBillingAccountSeatSummary: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Realm identifier for the project. Send it as X-Realm-Id. */
+                "X-Realm-Id": components["parameters"]["RealmIDHeader"];
+                /** @description Optional admin flag to enable realm-wide RLS for authorized callers. */
+                "X-Realm-Admin"?: components["parameters"]["RealmAdminHeader"];
+                /** @description Optional request correlation ID. The server may echo or override it. */
+                "X-Request-Id"?: components["parameters"]["XRequestId"];
+            };
+            path: {
+                billing_account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BillingAccountSeatSummaryEnvelope"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
         };
     };
     updateBillingAccountBillingDetails: {
@@ -1514,6 +1901,337 @@ export interface operations {
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
             422: components["responses"]["UnprocessableEntity"];
+        };
+    };
+    listBillingUsers: {
+        parameters: {
+            query?: {
+                /** @description Free-text search across user_id, business_user_id, billing_user_id, and display metadata. */
+                q?: string;
+                /** @description External product user identifier under this billing account. */
+                user_id?: string;
+                /** @description Internal alias for `user_id`; accepted for operational callers. */
+                business_user_id?: string;
+                status?: components["schemas"]["BillingUserStatus"][];
+                limit?: components["parameters"]["Limit"];
+                cursor?: components["parameters"]["Cursor"];
+            };
+            header: {
+                /** @description Realm identifier for the project. Send it as X-Realm-Id. */
+                "X-Realm-Id": components["parameters"]["RealmIDHeader"];
+                /** @description Optional admin flag to enable realm-wide RLS for authorized callers. */
+                "X-Realm-Admin"?: components["parameters"]["RealmAdminHeader"];
+                /** @description Optional request correlation ID. The server may echo or override it. */
+                "X-Request-Id"?: components["parameters"]["XRequestId"];
+            };
+            path: {
+                billing_account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BillingUserListEnvelope"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    createBillingUser: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Realm identifier for the project. Send it as X-Realm-Id. */
+                "X-Realm-Id": components["parameters"]["RealmIDHeader"];
+                /** @description Optional admin flag to enable realm-wide RLS for authorized callers. */
+                "X-Realm-Admin"?: components["parameters"]["RealmAdminHeader"];
+                /** @description Required for all write operations. Repeating the same route + key + body replays the original response for about 24 hours; conflicting bodies return 409. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKeyRequired"];
+                /** @description Optional request correlation ID. The server may echo or override it. */
+                "X-Request-Id"?: components["parameters"]["XRequestId"];
+            };
+            path: {
+                billing_account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BillingUserCreateRequest"];
+            };
+        };
+        responses: {
+            /** @description Idempotent replay */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BillingUserEnvelope"];
+                };
+            };
+            /** @description Created or linked */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BillingUserEnvelope"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            422: components["responses"]["UnprocessableEntity"];
+        };
+    };
+    getBillingUser: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Realm identifier for the project. Send it as X-Realm-Id. */
+                "X-Realm-Id": components["parameters"]["RealmIDHeader"];
+                /** @description Optional admin flag to enable realm-wide RLS for authorized callers. */
+                "X-Realm-Admin"?: components["parameters"]["RealmAdminHeader"];
+                /** @description Optional request correlation ID. The server may echo or override it. */
+                "X-Request-Id"?: components["parameters"]["XRequestId"];
+            };
+            path: {
+                billing_user_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BillingUserEnvelope"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    updateBillingUser: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Realm identifier for the project. Send it as X-Realm-Id. */
+                "X-Realm-Id": components["parameters"]["RealmIDHeader"];
+                /** @description Optional admin flag to enable realm-wide RLS for authorized callers. */
+                "X-Realm-Admin"?: components["parameters"]["RealmAdminHeader"];
+                /** @description Required for all write operations. Repeating the same route + key + body replays the original response for about 24 hours; conflicting bodies return 409. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKeyRequired"];
+                /** @description Optional request correlation ID. The server may echo or override it. */
+                "X-Request-Id"?: components["parameters"]["XRequestId"];
+            };
+            path: {
+                billing_user_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BillingUserUpdateRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BillingUserEnvelope"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            422: components["responses"]["UnprocessableEntity"];
+        };
+    };
+    disableBillingUser: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Realm identifier for the project. Send it as X-Realm-Id. */
+                "X-Realm-Id": components["parameters"]["RealmIDHeader"];
+                /** @description Optional admin flag to enable realm-wide RLS for authorized callers. */
+                "X-Realm-Admin"?: components["parameters"]["RealmAdminHeader"];
+                /** @description Required for all write operations. Repeating the same route + key + body replays the original response for about 24 hours; conflicting bodies return 409. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKeyRequired"];
+                /** @description Optional request correlation ID. The server may echo or override it. */
+                "X-Request-Id"?: components["parameters"]["XRequestId"];
+            };
+            path: {
+                billing_user_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BillingUserEnvelope"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    restoreBillingUser: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Realm identifier for the project. Send it as X-Realm-Id. */
+                "X-Realm-Id": components["parameters"]["RealmIDHeader"];
+                /** @description Optional admin flag to enable realm-wide RLS for authorized callers. */
+                "X-Realm-Admin"?: components["parameters"]["RealmAdminHeader"];
+                /** @description Required for all write operations. Repeating the same route + key + body replays the original response for about 24 hours; conflicting bodies return 409. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKeyRequired"];
+                /** @description Optional request correlation ID. The server may echo or override it. */
+                "X-Request-Id"?: components["parameters"]["XRequestId"];
+            };
+            path: {
+                billing_user_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BillingUserEnvelope"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    getBillingUserSummary: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Realm identifier for the project. Send it as X-Realm-Id. */
+                "X-Realm-Id": components["parameters"]["RealmIDHeader"];
+                /** @description Optional admin flag to enable realm-wide RLS for authorized callers. */
+                "X-Realm-Admin"?: components["parameters"]["RealmAdminHeader"];
+                /** @description Optional request correlation ID. The server may echo or override it. */
+                "X-Request-Id"?: components["parameters"]["XRequestId"];
+            };
+            path: {
+                billing_user_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BillingUserSummaryEnvelope"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    getBillingUserWallet: {
+        parameters: {
+            query?: {
+                refresh_grants?: boolean;
+            };
+            header: {
+                /** @description Realm identifier for the project. Send it as X-Realm-Id. */
+                "X-Realm-Id": components["parameters"]["RealmIDHeader"];
+                /** @description Optional admin flag to enable realm-wide RLS for authorized callers. */
+                "X-Realm-Admin"?: components["parameters"]["RealmAdminHeader"];
+                /** @description Optional request correlation ID. The server may echo or override it. */
+                "X-Request-Id"?: components["parameters"]["XRequestId"];
+            };
+            path: {
+                billing_user_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BillingUserWalletEnvelope"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    listBillingUserActivity: {
+        parameters: {
+            query?: {
+                kind?: components["schemas"]["BillingUserActivityKind"][];
+                limit?: components["parameters"]["Limit"];
+                cursor?: components["parameters"]["Cursor"];
+            };
+            header: {
+                /** @description Realm identifier for the project. Send it as X-Realm-Id. */
+                "X-Realm-Id": components["parameters"]["RealmIDHeader"];
+                /** @description Optional admin flag to enable realm-wide RLS for authorized callers. */
+                "X-Realm-Admin"?: components["parameters"]["RealmAdminHeader"];
+                /** @description Optional request correlation ID. The server may echo or override it. */
+                "X-Request-Id"?: components["parameters"]["XRequestId"];
+            };
+            path: {
+                billing_user_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BillingUserActivityListEnvelope"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
         };
     };
     listBillingContracts: {
@@ -3063,6 +3781,8 @@ export interface operations {
         parameters: {
             query?: {
                 billing_account_id?: string;
+                billing_user_id?: string;
+                assignment_scope?: components["schemas"]["BillingPlanAssignmentScope"];
                 plan_id?: string;
                 plan_code?: string;
                 subscription_item_id?: string;
@@ -3411,7 +4131,9 @@ export interface operations {
                 /** @description Filter by feature_code. */
                 feature_code?: string;
                 /** @description Filter by policy kind. */
-                kind?: "rate" | "quota" | "seats";
+                kind?: "rate" | "quota";
+                /** @description Filter by counter subject scope. */
+                subject_scope?: components["schemas"]["GatePolicySubjectScope"];
                 /** @description Filter by policy status. */
                 status?: "default" | "assignable" | "ceiling" | "disabled";
                 limit?: components["parameters"]["Limit"];

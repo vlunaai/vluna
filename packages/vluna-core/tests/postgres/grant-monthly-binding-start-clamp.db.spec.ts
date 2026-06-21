@@ -8,6 +8,7 @@ import { prepareDbTestContext } from '../utils/db-setup.js'
 const FIXTURE = path.resolve(__dirname, 'fixtures/grant_monthly_binding_start_clamp.sql')
 const realmId = 'realm-test'
 const billingAccountId = '11111111-1111-1111-1111-111111111111'
+const billingUserId = '22222222-2222-2222-2222-222222222222'
 
 describe('grant monthly cadence binding_start month clamp (db)', { tags: ['db'] }, () => {
   let stop: () => Promise<void>
@@ -52,6 +53,10 @@ describe('grant monthly cadence binding_start month clamp (db)', { tags: ['db'] 
       `insert into billing_accounts (billing_account_id, realm_id, billing_principal_id) values ($1, $2, $3)`,
       [billingAccountId, realmId, 'principal-1'],
     )
+    await seedClient.query(
+      `insert into billing_users (billing_user_id, realm_id, billing_account_id, business_user_id) values ($1, $2, $3, $4)`,
+      [billingUserId, realmId, billingAccountId, 'user-1'],
+    )
 
     await seedClient.query(
       `
@@ -73,10 +78,11 @@ describe('grant monthly cadence binding_start month clamp (db)', { tags: ['db'] 
     await seedClient.query(
       `
       insert into grant_assignments (
-        billing_account_id, program_id, source_kind, source_ref, window_start, window_end, status, metadata
-      ) values ($1, $2, $3, $4, $5, $6, $7, $8::jsonb)
+        billing_user_id, billing_account_id, program_id, source_kind, source_ref, window_start, window_end, status, metadata
+      ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb)
       `,
       [
+        billingUserId,
         billingAccountId,
         programId,
         'ops.manual',
@@ -115,8 +121,8 @@ describe('grant monthly cadence binding_start month clamp (db)', { tags: ['db'] 
           .where('program_id', '=', program.program_id)
           .executeTakeFirstOrThrow()
 
-        await issueGrantForAssignment(trx, { realmId, billingAccountId, program, assignment, quantity: 1, now: now1, isRealmAdmin: true })
-        await issueGrantForAssignment(trx, { realmId, billingAccountId, program, assignment, quantity: 1, now: now2, isRealmAdmin: true })
+        await issueGrantForAssignment(trx, { realmId, billingUserId, billingAccountId, program, assignment, quantity: 1, now: now1, isRealmAdmin: true })
+        await issueGrantForAssignment(trx, { realmId, billingUserId, billingAccountId, program, assignment, quantity: 1, now: now2, isRealmAdmin: true })
       })
     })
 

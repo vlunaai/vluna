@@ -20,6 +20,7 @@ type BudgetStatus = 'active' | 'closing' | 'closed' | 'expired' | 'canceled'
 
 type BudgetRow = {
   budget_id: string
+  billing_user_id: string
   billing_account_id: string
   name: string | null
   status: BudgetStatus
@@ -52,6 +53,7 @@ export class BudgetsService {
   ): Promise<BudgetList> {
     const db = this.ensureDb(req)
     const realmId = this.ensureRealmId(req)
+    const billingUserId = this.requireBillingUserId(req)
     const billingAccountId = this.requireBillingAccountId(req)
 
     const limit = clampLimit(Number(query?.limit ?? 50))
@@ -73,6 +75,7 @@ export class BudgetsService {
       .innerJoin('billing_accounts as ba', 'ba.billing_account_id', 'b.billing_account_id')
       .selectAll('b')
       .where('ba.realm_id', '=', realmId)
+      .where('b.billing_user_id', '=', billingUserId)
       .where('b.billing_account_id', '=', billingAccountId)
       .orderBy('b.created_at', 'desc')
 
@@ -142,6 +145,7 @@ export class BudgetsService {
   ): Promise<Budget> {
     const db = this.ensureDb(req)
     const realmId = this.ensureRealmId(req)
+    const billingUserId = this.requireBillingUserId(req)
     const billingAccountId = this.requireBillingAccountId(req)
 
     if (!billingAccountId) {
@@ -217,7 +221,7 @@ export class BudgetsService {
     }
 
     const result = await runInTransaction<BudgetRow>(db, async (trx) => {
-      await setRlsSession(trx, { realmId, billingAccountId, isRealmAdmin: true })
+      await setRlsSession(trx, { realmId, billingAccountId, billingUserId, isRealmAdmin: true })
 
       if (scopeKind === 'feature' && scopeRef) {
         const featureRow = await trx
@@ -233,6 +237,7 @@ export class BudgetsService {
       }
 
       const insertValues: Insertable<Database['budgets']> = {
+        billing_user_id: billingUserId,
         billing_account_id: billingAccountId,
         name: typeof body?.name === 'string' ? body.name : undefined,
         status: 'active',
@@ -268,6 +273,7 @@ export class BudgetsService {
   async getBudget(req: AppRequest, budgetId: string): Promise<Budget> {
     const db = this.ensureDb(req)
     const realmId = this.ensureRealmId(req)
+    const billingUserId = this.requireBillingUserId(req)
     const billingAccountId = this.requireBillingAccountId(req)
     const sanitizedBudgetId = this.sanitizeBudgetId(budgetId)
 
@@ -276,6 +282,7 @@ export class BudgetsService {
       .innerJoin('billing_accounts as ba', 'ba.billing_account_id', 'b.billing_account_id')
       .selectAll('b')
       .where('b.budget_id', '=', sanitizedBudgetId)
+      .where('b.billing_user_id', '=', billingUserId)
       .where('b.billing_account_id', '=', billingAccountId)
       .where('ba.realm_id', '=', realmId)
       .executeTakeFirst()
@@ -388,10 +395,12 @@ export class BudgetsService {
     budgetId: string,
   ): Promise<BudgetRow> {
     const realmId = this.ensureRealmId(req)
+    const billingUserId = this.requireBillingUserId(req)
     const billingAccountId = this.requireBillingAccountId(req)
     const sanitizedBudgetId = this.sanitizeBudgetId(budgetId)
     const row = await sql<BudgetRow>`
       SELECT b.budget_id,
+             b.billing_user_id,
              b.billing_account_id,
              b.name,
              b.status,
@@ -411,6 +420,7 @@ export class BudgetsService {
       FROM budgets b
       JOIN billing_accounts ba ON ba.billing_account_id = b.billing_account_id
       WHERE b.budget_id = ${sanitizedBudgetId}
+        AND b.billing_user_id = ${billingUserId}
         AND b.billing_account_id = ${billingAccountId}
         AND ba.realm_id = ${realmId}
       FOR UPDATE
@@ -455,6 +465,14 @@ export class BudgetsService {
       throw new HttpException({ code: 'AUTH.MISSING_ACCOUNT', message: 'billing account context missing' }, 400)
     }
     return billingAccountId
+  }
+
+  private requireBillingUserId(req: AppRequest): string {
+    const billingUserId = req.ctx?.billingUserId
+    if (!billingUserId) {
+      throw new HttpException({ code: 'AUTH.MISSING_USER', message: 'billing user context missing' }, 400)
+    }
+    return billingUserId
   }
 }
 

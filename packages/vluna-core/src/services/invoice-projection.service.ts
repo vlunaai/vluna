@@ -5,6 +5,7 @@ import { BillingPeriodService } from './billing-period.service.js'
 import { ensureFallbackGrantForPeriod } from './grant-issuance.service.js'
 import { isTransaction } from '../features/gate/services/gate.utils.js'
 import { generateInvoiceNumber } from './invoice-number.js'
+import { setRlsSession } from '../db/index.js'
 
 type DbOrTrx = Kysely<Database> | Transaction<Database>
 
@@ -55,29 +56,37 @@ export class InvoiceProjectionService {
       throw new Error('billing period is not frozen; refuse to project invoice proposal')
     }
 
-    const fallbackGrantId = await ensureFallbackGrantForPeriod(trx, {
+    await setRlsSession(trx, {
+      realmId: String(period.realm_id),
+      billingAccountId: String(period.billing_account_id),
+      isRealmAdmin: true,
+    })
+
+    const fallbackGrantIds = await ensureFallbackGrantIdsForPeriod(trx, {
       realmId: String(period.realm_id),
       billingAccountId: String(period.billing_account_id),
       periodStart: period.period_start,
       periodEnd: period.period_end,
     })
 
-    const allocations = await trx
-      .selectFrom('billing_rating_allocations')
-      .select([
-        'allocation_id',
-        'feature_code',
-        'applied_amount_xusd',
-      ])
-      .where('billing_account_id', '=', String(period.billing_account_id))
-      .where('rated_at', '>=', period.period_start)
-      .where('rated_at', '<', period.period_end)
-      .where('grant_id', '=', fallbackGrantId)
-      .where('direction', '=', 'debit')
-      .where('settlement_state', '=', 'settled')
-      .where('application_status', 'in', ['applied', 'applied_clipped'])
-      .where('reversal_of_allocation_id', 'is', null)
-      .execute()
+    const allocations = fallbackGrantIds.length > 0
+      ? await trx
+          .selectFrom('billing_rating_allocations')
+          .select([
+            'allocation_id',
+            'feature_code',
+            'applied_amount_xusd',
+          ])
+          .where('billing_account_id', '=', String(period.billing_account_id))
+          .where('rated_at', '>=', period.period_start)
+          .where('rated_at', '<', period.period_end)
+          .where('grant_id', 'in', fallbackGrantIds)
+          .where('direction', '=', 'debit')
+          .where('settlement_state', '=', 'settled')
+          .where('application_status', 'in', ['applied', 'applied_clipped'])
+          .where('reversal_of_allocation_id', 'is', null)
+          .execute()
+      : []
 
     const byFeature = new Map<string, bigint>()
     let totalXusd = 0n
@@ -125,7 +134,7 @@ export class InvoiceProjectionService {
             rounding,
           },
           scope: {
-            fallback_grant_id: fallbackGrantId,
+            fallback_grant_ids: fallbackGrantIds,
           },
         },
         raw_provider_payload: {},
@@ -197,4 +206,28 @@ export class InvoiceProjectionService {
 
     return this.createInvoiceProposalForBillingPeriodId(trx, { billingPeriodId: period.billingPeriodId, at: params.at })
   }
+}
+
+async function ensureFallbackGrantIdsForPeriod(
+  trx: Transaction<Database>,
+  params: { realmId: string; billingAccountId: string; periodStart: Date; periodEnd: Date },
+): Promise<string[]> {
+  const billingUsers = await trx
+    .selectFrom('billing_users')
+    .select(['billing_user_id'])
+    .where('billing_account_id', '=', params.billingAccountId)
+    .where('status', '=', 'active')
+    .execute()
+
+  const grantIds: string[] = []
+  for (const row of billingUsers) {
+    grantIds.push(await ensureFallbackGrantForPeriod(trx, {
+      realmId: params.realmId,
+      billingUserId: String(row.billing_user_id),
+      billingAccountId: params.billingAccountId,
+      periodStart: params.periodStart,
+      periodEnd: params.periodEnd,
+    }))
+  }
+  return grantIds
 }

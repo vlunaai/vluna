@@ -17,9 +17,10 @@ type CurrencyKind = 'fiat' | 'credit' | 'crypto' | 'token' | 'other'
 type ProductKind = 'subscription' | 'credit'
 type ProductStatus = 'active' | 'archived' | 'draft'
 type RecurringInterval = 'month' | 'year' | null
-type GatePolicyKind = 'rate' | 'quota' | 'seats'
+type GatePolicyKind = 'rate' | 'quota'
 type GatePolicyStatus = 'default' | 'assignable' | 'ceiling' | 'disabled'
 type GatePolicyEnforcement = 'optimistic' | 'reserve'
+type GatePolicySubjectScope = 'user' | 'account'
 type RoundingMode = 'round' | 'floor' | 'ceil' | 'truncate'
 type PriceRounding = 'floor' | 'nearest' | 'ceil'
 type BudgetStrategy = 'auto' | 'hot' | 'cold'
@@ -177,6 +178,7 @@ type CatalogProductSpec = {
   provider_product_id: string
   kind: ProductKind
   status: ProductStatus
+  display_priority: number
   name: string
   default_currency: string
 }
@@ -263,6 +265,7 @@ type GatePolicySpec = {
   name: string
   description: string | null
   kind: GatePolicyKind
+  subject_scope: GatePolicySubjectScope
   unit: string
   window_sec: number
   limit_count: string | null
@@ -601,6 +604,25 @@ function readOptionalString(value: unknown): string | null {
   return trimmed.length > 0 ? trimmed : null
 }
 
+function readCatalogPriceRecurringInterval(record: UnknownRecord): RecurringInterval {
+  return record.recurring_interval === null || record.recurring_interval === undefined
+    ? null
+    : (record.recurring_interval as RecurringInterval)
+}
+
+function readCatalogPriceSubscriptionGroupKey(record: UnknownRecord, recurringInterval: RecurringInterval): string | null {
+  const explicitGroupKey = readTrimmedString(record.subscription_group_key ?? record.group_key ?? record.subscription_group)
+  if (explicitGroupKey) return explicitGroupKey
+  if (!recurringInterval) return null
+  return readTrimmedString(record.product_code) || null
+}
+
+function readGatePolicySubjectScope(value: unknown): GatePolicySubjectScope {
+  const normalized = readTrimmedString(value ?? 'user', 'user')
+  if (normalized === 'user' || normalized === 'account') return normalized
+  throw new Error(`importer: invalid gate_policy subject_scope: ${normalized}`)
+}
+
 function readOptionalUuid(value: unknown, field: string): string | undefined {
   const trimmed = readOptionalString(value)
   if (!trimmed) return undefined
@@ -644,27 +666,29 @@ function parseRealmBundle(raw: UnknownRecord, strict: boolean, legacyRealmId?: s
     provider_product_id: readTrimmedString(record.provider_product_id ?? record.product_code),
     kind: (record.kind ?? 'subscription') as ProductKind,
     status: (record.status ?? 'draft') as ProductStatus,
+    display_priority: readNumber(record.display_priority, 100),
     name: readTrimmedString(record.name),
     default_currency: readUppercaseString(record.default_currency ?? 'USD'),
   }))
 
-  const catalogPrices: CatalogPriceSpec[] = mapRecords(raw.catalog_prices, (record) => ({
-    catalog_price_id: readOptionalUuid(record.catalog_price_id, 'catalog_price_id'),
-    realm_id: realmId,
-    price_code: readTrimmedString(record.price_code),
-    product_code: readTrimmedString(record.product_code),
-    provider_price_id: readTrimmedString(record.provider_price_id ?? record.price_code),
-    status: (record.status ?? 'active') as 'active' | 'archived',
-    currency: readUppercaseString(record.currency ?? 'USD'),
-    unit_amount: readNumber(record.unit_amount, 0),
-    recurring_interval: record.recurring_interval === null || record.recurring_interval === undefined ? null : (record.recurring_interval as RecurringInterval),
-    recurring_count: record.recurring_count === null || record.recurring_count === undefined ? null : readNumber(record.recurring_count),
-    display_priority: readNumber(record.display_priority, 100),
-    metadata: normalizeMetadata(record.metadata),
-    subscription_group_key: readTrimmedString(
-      record.subscription_group_key ?? record.group_key ?? record.subscription_group ?? record.product_code,
-    ) || null,
-  }))
+  const catalogPrices: CatalogPriceSpec[] = mapRecords(raw.catalog_prices, (record) => {
+    const recurringInterval = readCatalogPriceRecurringInterval(record)
+    return {
+      catalog_price_id: readOptionalUuid(record.catalog_price_id, 'catalog_price_id'),
+      realm_id: realmId,
+      price_code: readTrimmedString(record.price_code),
+      product_code: readTrimmedString(record.product_code),
+      provider_price_id: readTrimmedString(record.provider_price_id ?? record.price_code),
+      status: (record.status ?? 'active') as 'active' | 'archived',
+      currency: readUppercaseString(record.currency ?? 'USD'),
+      unit_amount: readNumber(record.unit_amount, 0),
+      recurring_interval: recurringInterval,
+      recurring_count: record.recurring_count === null || record.recurring_count === undefined ? null : readNumber(record.recurring_count),
+      display_priority: readNumber(record.display_priority, 100),
+      metadata: normalizeMetadata(record.metadata),
+      subscription_group_key: readCatalogPriceSubscriptionGroupKey(record, recurringInterval),
+    }
+  })
 
   const catalogSubscriptionGroups: CatalogSubscriptionGroupSpec[] = mapRecords(
     raw.subscription_groups,
@@ -831,6 +855,7 @@ function parseRealmBundle(raw: UnknownRecord, strict: boolean, legacyRealmId?: s
     name: readTrimmedString(record.name),
     description: readTrimmedString(record.description ?? ''),
     kind: (record.kind ?? 'rate') as GatePolicyKind,
+    subject_scope: readGatePolicySubjectScope(record.subject_scope ?? record.subjectScope),
     unit: readTrimmedString(record.unit ?? 'request'),
     window_sec: readNumber(record.window_sec, 0),
     limit_minor: record.limit_minor === null || record.limit_minor === undefined ? null : readString(record.limit_minor, '0'),
@@ -1172,26 +1197,28 @@ async function loadBillingImportSpec(filePath: string, strict = false): Promise<
     provider_product_id: readTrimmedString(record.provider_product_id ?? record.product_code),
     kind: (record.kind ?? 'subscription') as ProductKind,
     status: (record.status ?? 'draft') as ProductStatus,
+    display_priority: readNumber(record.display_priority, 100),
     name: readTrimmedString(record.name),
     default_currency: readUppercaseString(record.default_currency ?? 'USD'),
   })), ...bundleCatalogProducts]
 
-  const catalogPrices = [...mapRecords(data.catalog_prices, (record) => ({
-    catalog_price_id: readOptionalUuid(record.catalog_price_id, 'catalog_price_id'),
-    realm_id: readTrimmedString(record.realm_id ?? defaultRealm, defaultRealm),
-    price_code: readTrimmedString(record.price_code),
-    product_code: readTrimmedString(record.product_code),
-    provider_price_id: readTrimmedString(record.provider_price_id ?? record.price_code),
-    currency: readUppercaseString(record.currency ?? 'USD'),
-    unit_amount: readNumber(record.unit_amount, 0),
-    recurring_interval: record.recurring_interval === null || record.recurring_interval === undefined ? null : (record.recurring_interval as RecurringInterval),
-    recurring_count: record.recurring_count === null || record.recurring_count === undefined ? null : readNumber(record.recurring_count),
-    display_priority: readNumber(record.display_priority, 100),
-    metadata: normalizeMetadata(record.metadata),
-    subscription_group_key: readTrimmedString(
-      record.subscription_group_key ?? record.group_key ?? record.subscription_group ?? record.product_code,
-    ) || null,
-  })), ...bundleCatalogPrices]
+  const catalogPrices = [...mapRecords(data.catalog_prices, (record) => {
+    const recurringInterval = readCatalogPriceRecurringInterval(record)
+    return {
+      catalog_price_id: readOptionalUuid(record.catalog_price_id, 'catalog_price_id'),
+      realm_id: readTrimmedString(record.realm_id ?? defaultRealm, defaultRealm),
+      price_code: readTrimmedString(record.price_code),
+      product_code: readTrimmedString(record.product_code),
+      provider_price_id: readTrimmedString(record.provider_price_id ?? record.price_code),
+      currency: readUppercaseString(record.currency ?? 'USD'),
+      unit_amount: readNumber(record.unit_amount, 0),
+      recurring_interval: recurringInterval,
+      recurring_count: record.recurring_count === null || record.recurring_count === undefined ? null : readNumber(record.recurring_count),
+      display_priority: readNumber(record.display_priority, 100),
+      metadata: normalizeMetadata(record.metadata),
+      subscription_group_key: readCatalogPriceSubscriptionGroupKey(record, recurringInterval),
+    }
+  }), ...bundleCatalogPrices]
 
   const catalogSubscriptionGroups = [...mapRecords(
     data.subscription_groups,
@@ -1597,6 +1624,7 @@ async function upsertCatalogProducts(trx: Transaction<Database>, spec: BillingIm
       'provider_product_id',
       'kind',
       'status',
+      'display_priority',
       'name',
       'default_currency',
     ])
@@ -1627,6 +1655,7 @@ async function upsertCatalogProducts(trx: Transaction<Database>, spec: BillingIm
           provider_product_id: product.provider_product_id,
           kind: product.kind,
           status: product.status,
+          display_priority: product.display_priority,
           name: product.name,
           default_currency: product.default_currency,
         })
@@ -1647,6 +1676,9 @@ async function upsertCatalogProducts(trx: Transaction<Database>, spec: BillingIm
       }
       if (current.kind !== product.kind) changes.kind = { current: current.kind, next: product.kind }
       if (current.status !== product.status) changes.status = { current: current.status, next: product.status }
+      if (Number(current.display_priority ?? 100) !== product.display_priority) {
+        changes.display_priority = { current: current.display_priority, next: product.display_priority }
+      }
       if (current.name !== product.name) changes.name = { current: current.name, next: product.name }
       if (current.default_currency !== product.default_currency) {
         changes.default_currency = { current: current.default_currency, next: product.default_currency }
@@ -1661,6 +1693,7 @@ async function upsertCatalogProducts(trx: Transaction<Database>, spec: BillingIm
             provider_product_id: product.provider_product_id,
             kind: product.kind,
             status: product.status,
+            display_priority: product.display_priority,
             name: product.name,
             default_currency: product.default_currency,
           })
@@ -1717,9 +1750,10 @@ async function upsertCatalogPrices(
       throw new Error(`importer: price ${price.price_code} references unknown product ${price.product_code}`)
     }
     const groupId = price.subscription_group_key ? groupIds.get(`${targetRealm}::${price.subscription_group_key}`) : null
-    if (price.recurring_interval && !groupId) {
-      throw new Error(`importer: subscription price ${price.price_code} missing subscription_group_key mapping`)
+    if (price.subscription_group_key && !groupId) {
+      throw new Error(`importer: catalog_price ${price.price_code} missing subscription_group_key mapping`)
     }
+    const subscriptionGroupKey = groupId ? price.subscription_group_key : null
     const current = byCode.get(price.price_code)
     if (!current) {
       if (price.catalog_price_id) {
@@ -1744,7 +1778,7 @@ async function upsertCatalogPrices(
           display_priority: price.display_priority,
           metadata: price.metadata ?? {},
           subscription_group_id: groupId ?? null,
-          subscription_group_key: price.subscription_group_key,
+          subscription_group_key: subscriptionGroupKey,
         })
         .returning(['catalog_price_id'])
         .executeTakeFirstOrThrow()
@@ -1772,7 +1806,7 @@ async function upsertCatalogPrices(
         Number(current.display_priority ?? 0) !== Number(price.display_priority ?? 0) ||
         !deepEqual(current.metadata ?? {}, price.metadata ?? {}) ||
         String(current.subscription_group_id ?? '') !== String(groupId ?? '') ||
-        (current.subscription_group_key ?? null) !== (price.subscription_group_key ?? null)
+        (current.subscription_group_key ?? null) !== subscriptionGroupKey
       if (needsUpdate) {
         const changes: Record<string, { current: unknown; next: unknown }> = {}
         if (current.provider_price_id !== price.provider_price_id) {
@@ -1787,8 +1821,8 @@ async function upsertCatalogPrices(
         if (String(current.subscription_group_id ?? '') !== String(groupId ?? '')) {
           changes.subscription_group_id = { current: current.subscription_group_id, next: groupId }
         }
-        if ((current.subscription_group_key ?? null) !== (price.subscription_group_key ?? null)) {
-          changes.subscription_group_key = { current: current.subscription_group_key, next: price.subscription_group_key }
+        if ((current.subscription_group_key ?? null) !== subscriptionGroupKey) {
+          changes.subscription_group_key = { current: current.subscription_group_key, next: subscriptionGroupKey }
         }
         await trx
           .updateTable('catalog_prices')
@@ -1797,7 +1831,7 @@ async function upsertCatalogPrices(
             display_priority: price.display_priority,
             metadata: price.metadata ?? {},
             subscription_group_id: groupId ?? null,
-            subscription_group_key: price.subscription_group_key,
+            subscription_group_key: subscriptionGroupKey,
           })
           .where('price_code', '=', price.price_code)
           .executeTakeFirst()
@@ -2378,6 +2412,7 @@ async function upsertGatePolicies(
       'description',
       'feature_code',
       'kind',
+      'subject_scope',
       'unit',
       'window_sec',
       'limit_count',
@@ -2407,6 +2442,7 @@ async function upsertGatePolicies(
           description: policy.description ?? undefined,
           feature_code: policy.feature_code,
           kind: policy.kind,
+          subject_scope: policy.subject_scope,
           unit: policy.unit,
           window_sec: policy.window_sec,
           limit_count: policy.limit_count ?? undefined,
@@ -2430,6 +2466,9 @@ async function upsertGatePolicies(
         changes.bundle_id = { current: String(current.bundle_id ?? ''), next: bundleId }
       }
       if (current.kind !== policy.kind) changes.kind = { current: current.kind, next: policy.kind }
+      if (current.subject_scope !== policy.subject_scope) {
+        changes.subject_scope = { current: current.subject_scope, next: policy.subject_scope }
+      }
       if (current.unit !== policy.unit) changes.unit = { current: current.unit, next: policy.unit }
       if (Number(current.window_sec) !== Number(policy.window_sec)) {
         changes.window_sec = { current: current.window_sec, next: policy.window_sec }
@@ -2462,6 +2501,7 @@ async function upsertGatePolicies(
             feature_code: policy.feature_code,
             bundle_id: bundleId,
             kind: policy.kind,
+            subject_scope: policy.subject_scope,
             unit: policy.unit,
             window_sec: policy.window_sec,
             limit_count: policy.limit_count ?? undefined,

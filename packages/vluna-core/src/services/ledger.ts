@@ -4,6 +4,7 @@ import type { Database } from '../types/database.js'
 type LedgerEntryReason = 'adjustment' | 'purchase' | 'consumption' | 'transfer' | 'refund' | 'reversal'
 
 type AppendLedgerEntryParams = {
+  billingUserId: string
   billingAccountId: string
   currencyCode: string
   amountXusd: bigint
@@ -29,17 +30,18 @@ export async function appendLedgerEntry(
   params: AppendLedgerEntryParams,
 ): Promise<AppendLedgerEntryResult> {
   if (params.amountXusd === 0n) {
-    const ledger = await getOrCreateLedgerAccount(trx, params.billingAccountId, params.currencyCode)
+    const ledger = await getOrCreateLedgerAccount(trx, params.billingUserId, params.billingAccountId, params.currencyCode)
     return { inserted: false, ledgerId: ledger.ledger_id }
   }
 
-  const ledger = await getOrCreateLedgerAccount(trx, params.billingAccountId, params.currencyCode)
+  const ledger = await getOrCreateLedgerAccount(trx, params.billingUserId, params.billingAccountId, params.currencyCode)
   const amountText = params.amountXusd.toString()
 
   const inserted = await trx
     .insertInto('ledger_entries')
     .values({
       ledger_id: ledger.ledger_id,
+      billing_user_id: ledger.billing_user_id,
       billing_account_id: ledger.billing_account_id,
       amount_xusd: amountText,
       reason: params.reason,
@@ -88,22 +90,25 @@ export async function appendLedgerEntry(
 
 export async function getOrCreateLedgerAccount(
   trx: Kysely<Database>,
+  billingUserId: string,
   billingAccountId: string,
   currencyCode: string,
 ) {
   await trx
     .insertInto('ledger_accounts')
     .values({
+      billing_user_id: billingUserId,
       billing_account_id: billingAccountId,
       currency_code: currencyCode,
       balance_xusd: '0',
     })
-    .onConflict((oc) => oc.columns(['billing_account_id', 'currency_code']).doNothing())
+    .onConflict((oc) => oc.columns(['billing_user_id', 'currency_code']).doNothing())
     .execute()
 
   const ledger = await trx
     .selectFrom('ledger_accounts')
-    .select(['ledger_id', 'billing_account_id', 'balance_xusd'])
+    .select(['ledger_id', 'billing_user_id', 'billing_account_id', 'balance_xusd'])
+    .where('billing_user_id', '=', billingUserId)
     .where('billing_account_id', '=', billingAccountId)
     .where('currency_code', '=', currencyCode)
     .executeTakeFirst()

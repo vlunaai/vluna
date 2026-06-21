@@ -8,14 +8,13 @@ import type { AppRequest } from '../../../types/app-request.js'
 import { GateService } from '../services/gate.service.js'
 import type { GateHint } from '../services/gate.hints.js'
 import { ServiceAuthGuard } from '../../../auth/guards/service-auth.guard.js'
-import { ServiceAccountGuard } from '../../../auth/guards/service-account.guard.js'
+import { ServiceRuntimeUserGuard } from '../../../auth/guards/service-runtime-user.guard.js'
 import { AuthRequiredGuard } from '../../../auth/guards/auth-required.guard.js'
 import { TokenClaimsGuard } from '../../../auth/guards/token-claims.guard.js'
 import { RealmMembershipGuard } from '../../../auth/guards/realm-membership.guard.js'
 
 @Controller('gate')
-// @UseGuards(RealmGuard, TokenClaimsGuard, PrincipalGuard, PrincipalBillingAccountGuard)
-@UseGuards(RealmGuard, AuthRequiredGuard, ServiceAuthGuard, TokenClaimsGuard, RealmMembershipGuard, ServiceAccountGuard)
+@UseGuards(RealmGuard, AuthRequiredGuard, ServiceAuthGuard, TokenClaimsGuard, RealmMembershipGuard, ServiceRuntimeUserGuard)
 export class GateController {
   constructor(@Inject(GateService) private readonly gateService: GateService) {}
 

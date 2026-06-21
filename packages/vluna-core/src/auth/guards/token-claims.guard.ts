@@ -148,7 +148,9 @@ export class TokenClaimsGuard implements CanActivate {
     req.ctx.principal = { id: claims.subject_id, type: claims.subject_type }
     req.ctx.serviceAuthBinding = {
       principalId: claims.subject_id,
+      userId: claims.subject_id,
       billingAccountId: req.ctx.serviceAuthBinding?.billingAccountId,
+      billingUserId: req.ctx.serviceAuthBinding?.billingUserId,
     }
     const realmAdminHeader =
       (req.headers?.['x-realm-admin'] as string | undefined) ||
@@ -219,12 +221,19 @@ export class TokenClaimsGuard implements CanActivate {
       ctx.realmId = realmId
     }
 
-    const principalId = String(payload.principal_id || '').trim()
+    const principalId = String(payload.billing_principal_id || payload.principal_id || '').trim()
     if (principalId) {
       ctx.principal = { id: principalId, type: 'platform' }
     }
+    const businessUserId = String(payload.business_user_id || payload.user_id || payload.sub || '').trim()
+    if (businessUserId) {
+      ctx.businessUserId = businessUserId
+      ctx.userId = businessUserId
+    }
     const billingAccountId = String(payload.billing_account_id || '').trim()
     if (billingAccountId) ctx.billingAccountId = billingAccountId
+    const billingUserId = String(payload.billing_user_id || '').trim()
+    if (billingUserId) ctx.billingUserId = billingUserId
     const scopesRaw = payload.plt_scopes || payload.apt_scopes
     const scopes = Array.isArray(scopesRaw) ? scopesRaw.map((val) => String(val || '')).filter(Boolean) : []
     const versionRaw = Number(payload.tv || 1)

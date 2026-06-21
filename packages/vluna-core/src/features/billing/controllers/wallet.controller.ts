@@ -4,7 +4,7 @@ import { TokenClaimsGuard } from '../../../auth/guards/token-claims.guard.js'
 import { Scopes } from '../../../auth/decorators/scopes.decorator.js'
 import { BILLING_SCOPES } from '../../../auth/constants/scopes.constants.js'
 import { PrincipalGuard } from '../../../auth/guards/principal.guard.js'
-import { PrincipalBillingAccountGuard } from '../../../auth/guards/principal-billing-account.guard.js'
+import { ServiceRuntimeUserGuard } from '../../../auth/guards/service-runtime-user.guard.js'
 import type { AppRequest } from '../../../types/app-request.js'
 import {
   WalletService,
@@ -17,7 +17,6 @@ import {
 } from '../services/wallet.service.js'
 import { AuthRequiredGuard } from '../../../auth/guards/auth-required.guard.js'
 import { ServiceAuthGuard } from '../../../auth/guards/service-auth.guard.js'
-import { ServiceAccountGuard } from '../../../auth/guards/service-account.guard.js'
 import { IdempotencyInterceptor } from '../../../support/idempotency.interceptor.js'
 import { RealmMembershipGuard } from '../../../auth/guards/realm-membership.guard.js'
 
@@ -38,7 +37,7 @@ abstract class WalletControllerBase {
 }
 
 @Controller('wallet')
-@UseGuards(RealmGuard, TokenClaimsGuard, RealmMembershipGuard, PrincipalGuard, PrincipalBillingAccountGuard)
+@UseGuards(RealmGuard, TokenClaimsGuard, RealmMembershipGuard, PrincipalGuard, ServiceRuntimeUserGuard)
 export class WalletController extends WalletControllerBase {
   @Get('balance')
   @Scopes(BILLING_SCOPES.READ_ALL)
@@ -48,7 +47,7 @@ export class WalletController extends WalletControllerBase {
 }
 
 @Controller('wallet')
-@UseGuards(RealmGuard, AuthRequiredGuard, ServiceAuthGuard, TokenClaimsGuard, RealmMembershipGuard, ServiceAccountGuard, PrincipalGuard, PrincipalBillingAccountGuard)
+@UseGuards(RealmGuard, AuthRequiredGuard, ServiceAuthGuard, TokenClaimsGuard, RealmMembershipGuard, PrincipalGuard, ServiceRuntimeUserGuard)
 export class WalletServiceController extends WalletControllerBase {
   @Get('balance')
   async getWalletBalance(@Req() req: AppRequest, @Query() q: GetBalanceQuery): Promise<GetBalance200> {

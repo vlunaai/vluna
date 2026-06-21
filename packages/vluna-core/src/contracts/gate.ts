@@ -7,11 +7,11 @@ export interface paths {
     "/gate/authorize": {
         parameters: {
             query?: never;
-            header?: {
-                /** @description Optional principal identifier used to resolve the billing account. You may send it with X-Billing-Account-Id or by itself. For account-scoped endpoints, send at least one of X-Principal-Id or X-Billing-Account-Id. If you send both, they must resolve to the same billing account in the realm. */
-                "X-Principal-Id"?: components["parameters"]["PrincipalIdHeader"];
-                /** @description Optional billing account context. You may send it with X-Principal-Id or by itself. For account-scoped endpoints, send at least one of X-Principal-Id or X-Billing-Account-Id. If you send both, they must refer to the same billing account in the realm. */
-                "X-Billing-Account-Id"?: components["parameters"]["BillingAccountIdHeader"];
+            header: {
+                /** @description External payor principal identifier used to resolve the billing account for runtime calls. */
+                "X-Principal-Id": components["parameters"]["PrincipalIdHeaderRequired"];
+                /** @description External runtime user identifier scoped by the billing account for runtime calls. */
+                "X-User-Id": components["parameters"]["UserIdHeaderRequired"];
             };
             path?: never;
             cookie?: never;
@@ -29,11 +29,11 @@ export interface paths {
     "/gate/commits": {
         parameters: {
             query?: never;
-            header?: {
-                /** @description Optional principal identifier used to resolve the billing account. You may send it with X-Billing-Account-Id or by itself. For account-scoped endpoints, send at least one of X-Principal-Id or X-Billing-Account-Id. If you send both, they must resolve to the same billing account in the realm. */
-                "X-Principal-Id"?: components["parameters"]["PrincipalIdHeader"];
-                /** @description Optional billing account context. You may send it with X-Principal-Id or by itself. For account-scoped endpoints, send at least one of X-Principal-Id or X-Billing-Account-Id. If you send both, they must refer to the same billing account in the realm. */
-                "X-Billing-Account-Id"?: components["parameters"]["BillingAccountIdHeader"];
+            header: {
+                /** @description External payor principal identifier used to resolve the billing account for runtime calls. */
+                "X-Principal-Id": components["parameters"]["PrincipalIdHeaderRequired"];
+                /** @description External runtime user identifier scoped by the billing account for runtime calls. */
+                "X-User-Id": components["parameters"]["UserIdHeaderRequired"];
             };
             path?: never;
             cookie?: never;
@@ -54,11 +54,11 @@ export interface paths {
     "/gate/ingest": {
         parameters: {
             query?: never;
-            header?: {
-                /** @description Optional principal identifier used to resolve the billing account. You may send it with X-Billing-Account-Id or by itself. For account-scoped endpoints, send at least one of X-Principal-Id or X-Billing-Account-Id. If you send both, they must resolve to the same billing account in the realm. */
-                "X-Principal-Id"?: components["parameters"]["PrincipalIdHeader"];
-                /** @description Optional billing account context. You may send it with X-Principal-Id or by itself. For account-scoped endpoints, send at least one of X-Principal-Id or X-Billing-Account-Id. If you send both, they must refer to the same billing account in the realm. */
-                "X-Billing-Account-Id"?: components["parameters"]["BillingAccountIdHeader"];
+            header: {
+                /** @description External payor principal identifier used to resolve the billing account for runtime calls. */
+                "X-Principal-Id": components["parameters"]["PrincipalIdHeaderRequired"];
+                /** @description External runtime user identifier scoped by the billing account for runtime calls. */
+                "X-User-Id": components["parameters"]["UserIdHeaderRequired"];
             };
             path?: never;
             cookie?: never;
@@ -79,11 +79,11 @@ export interface paths {
     "/gate/commits/batch": {
         parameters: {
             query?: never;
-            header?: {
-                /** @description Optional principal identifier used to resolve the billing account. You may send it with X-Billing-Account-Id or by itself. For account-scoped endpoints, send at least one of X-Principal-Id or X-Billing-Account-Id. If you send both, they must resolve to the same billing account in the realm. */
-                "X-Principal-Id"?: components["parameters"]["PrincipalIdHeader"];
-                /** @description Optional billing account context. You may send it with X-Principal-Id or by itself. For account-scoped endpoints, send at least one of X-Principal-Id or X-Billing-Account-Id. If you send both, they must refer to the same billing account in the realm. */
-                "X-Billing-Account-Id"?: components["parameters"]["BillingAccountIdHeader"];
+            header: {
+                /** @description External payor principal identifier used to resolve the billing account for runtime calls. */
+                "X-Principal-Id": components["parameters"]["PrincipalIdHeaderRequired"];
+                /** @description External runtime user identifier scoped by the billing account for runtime calls. */
+                "X-User-Id": components["parameters"]["UserIdHeaderRequired"];
             };
             path?: never;
             cookie?: never;
@@ -104,11 +104,11 @@ export interface paths {
     "/gate/cancel": {
         parameters: {
             query?: never;
-            header?: {
-                /** @description Optional principal identifier used to resolve the billing account. You may send it with X-Billing-Account-Id or by itself. For account-scoped endpoints, send at least one of X-Principal-Id or X-Billing-Account-Id. If you send both, they must resolve to the same billing account in the realm. */
-                "X-Principal-Id"?: components["parameters"]["PrincipalIdHeader"];
-                /** @description Optional billing account context. You may send it with X-Principal-Id or by itself. For account-scoped endpoints, send at least one of X-Principal-Id or X-Billing-Account-Id. If you send both, they must refer to the same billing account in the realm. */
-                "X-Billing-Account-Id"?: components["parameters"]["BillingAccountIdHeader"];
+            header: {
+                /** @description External payor principal identifier used to resolve the billing account for runtime calls. */
+                "X-Principal-Id": components["parameters"]["PrincipalIdHeaderRequired"];
+                /** @description External runtime user identifier scoped by the billing account for runtime calls. */
+                "X-User-Id": components["parameters"]["UserIdHeaderRequired"];
             };
             path?: never;
             cookie?: never;
@@ -126,11 +126,11 @@ export interface paths {
     "/gate/limits": {
         parameters: {
             query?: never;
-            header?: {
-                /** @description Optional principal identifier used to resolve the billing account. You may send it with X-Billing-Account-Id or by itself. For account-scoped endpoints, send at least one of X-Principal-Id or X-Billing-Account-Id. If you send both, they must resolve to the same billing account in the realm. */
-                "X-Principal-Id"?: components["parameters"]["PrincipalIdHeader"];
-                /** @description Optional billing account context. You may send it with X-Principal-Id or by itself. For account-scoped endpoints, send at least one of X-Principal-Id or X-Billing-Account-Id. If you send both, they must refer to the same billing account in the realm. */
-                "X-Billing-Account-Id"?: components["parameters"]["BillingAccountIdHeader"];
+            header: {
+                /** @description External payor principal identifier used to resolve the billing account for runtime calls. */
+                "X-Principal-Id": components["parameters"]["PrincipalIdHeaderRequired"];
+                /** @description External runtime user identifier scoped by the billing account for runtime calls. */
+                "X-User-Id": components["parameters"]["UserIdHeaderRequired"];
             };
             path?: never;
             cookie?: never;
@@ -151,11 +151,11 @@ export interface paths {
     "/gate/meters": {
         parameters: {
             query?: never;
-            header?: {
-                /** @description Optional principal identifier used to resolve the billing account. You may send it with X-Billing-Account-Id or by itself. For account-scoped endpoints, send at least one of X-Principal-Id or X-Billing-Account-Id. If you send both, they must resolve to the same billing account in the realm. */
-                "X-Principal-Id"?: components["parameters"]["PrincipalIdHeader"];
-                /** @description Optional billing account context. You may send it with X-Principal-Id or by itself. For account-scoped endpoints, send at least one of X-Principal-Id or X-Billing-Account-Id. If you send both, they must refer to the same billing account in the realm. */
-                "X-Billing-Account-Id"?: components["parameters"]["BillingAccountIdHeader"];
+            header: {
+                /** @description External payor principal identifier used to resolve the billing account for runtime calls. */
+                "X-Principal-Id": components["parameters"]["PrincipalIdHeaderRequired"];
+                /** @description External runtime user identifier scoped by the billing account for runtime calls. */
+                "X-User-Id": components["parameters"]["UserIdHeaderRequired"];
             };
             path?: never;
             cookie?: never;
@@ -167,57 +167,6 @@ export interface paths {
         get: operations["listMeterLimits"];
         put?: never;
         post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/seats": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** List active seats for the current billing account */
-        get: operations["listSeats"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/seats/revoke": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Revoke a seat for the current billing account */
-        post: operations["revokeSeat"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/seats/restore": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Restore a revoked seat for the current billing account */
-        post: operations["restoreSeat"];
         delete?: never;
         options?: never;
         head?: never;
@@ -274,10 +223,10 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Query usage report scoped to a single billing account (self-service)
-         * @description Same schema as /reports/usage but authenticated end-users may only query their own billing account. Server enforces billing_account_id=path param.
+         * Query usage report scoped to the authenticated billing user (self-service)
+         * @description Same schema as /reports/usage, but authenticated end users may only query their own resolved billing user. The server enforces billing_user_id from the token/request context and keeps billing_account_id as the parent payor scope.
          */
-        post: operations["gateUsageReportsByAccount"];
+        post: operations["gateUsageReportsSelf"];
         delete?: never;
         options?: never;
         head?: never;
@@ -294,10 +243,10 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Query settlement report scoped to a single billing account (self-service)
-         * @description Same schema as /reports/settlements but authenticated end-users may only query their own billing account. Server enforces billing_account_id=path param.
+         * Query settlement report scoped to the authenticated billing user (self-service)
+         * @description Same schema as /reports/settlements, but authenticated end users may only query their own resolved billing user. The server enforces billing_user_id from the token/request context and keeps billing_account_id as the parent payor scope.
          */
-        post: operations["gateSettlementReportsByAccount"];
+        post: operations["gateSettlementReportsSelf"];
         delete?: never;
         options?: never;
         head?: never;
@@ -331,8 +280,6 @@ export interface components {
             /** @description Optional feature_family to bind or auto-create. If provided and not found in this realm, the server may auto-register it. If omitted, the server uses the per-realm fallback feature_family for feature auto-registration.
              *      */
             feature_family_code?: string;
-            /** @description Optional seat identifier. Required when seats policy is enabled. */
-            seat_id?: string;
             /** @description Optional; for estimation and hints only, not enforced. */
             estimated_quantity_minor?: string;
             /** @description Optional budget to check against */
@@ -469,6 +416,11 @@ export interface components {
             data?: components["schemas"]["CancelResponse"];
         };
         QuotaWindow: {
+            /**
+             * @description Counter subject scope for this quota window.
+             * @enum {string}
+             */
+            subject_scope?: "user" | "account";
             /** Format: date-time */
             window_start?: string;
             /** Format: date-time */
@@ -477,6 +429,11 @@ export interface components {
             used_minor?: string;
         };
         RateWindow: {
+            /**
+             * @description Counter subject scope for this rate window.
+             * @enum {string}
+             */
+            subject_scope?: "user" | "account";
             /** Format: date-time */
             window_start?: string;
             /** Format: date-time */
@@ -569,8 +526,6 @@ export interface components {
         SingleCommit: {
             /** @description Opaque feature_family token issued by /gate/authorize. The server resolves it to the underlying lease. */
             lease_token: string;
-            /** @description Optional seat identifier for audit; if provided, must match lease metadata. */
-            seat_id?: string;
             /**
              * Format: int64
              * @description Feature-level usage quantity (gate dimension). This value is used for authorize/lease/quota/rate accounting at the feature level and may differ from any meter-level breakdown in `meters[]`. Do not assume `quantity_minor == sum(meters[].quantity_minor)`.
@@ -589,30 +544,6 @@ export interface components {
             as_of?: string;
             /** @description Meter-level pricing lines for pricing only Server validates `meters[].meter_code` against the feature_meters whitelist for `feature_code`. Default policy: deny (422 UnprocessableEntity) with error.type='meter_not_allowed_for_feature'. */
             meters?: components["schemas"]["MeterCommit"][];
-        };
-        SeatRecord: {
-            feature_code: string;
-            seat_id: string;
-            /** @enum {string} */
-            state: "active" | "revoked";
-            /** Format: date-time */
-            assigned_at: string;
-            /** Format: date-time */
-            last_seen_at: string;
-            revoked_at?: string | null;
-        };
-        SeatListResponse: {
-            seats: components["schemas"]["SeatRecord"][];
-        };
-        SeatActionRequest: {
-            feature_code: string;
-            seat_id: string;
-        };
-        SeatListEnvelope: components["schemas"]["EnvelopeBase"] & {
-            data: components["schemas"]["SeatListResponse"];
-        };
-        SeatActionEnvelope: components["schemas"]["EnvelopeBase"] & {
-            data: components["schemas"]["SeatRecord"];
         };
         MeterLimit: {
             meter_code?: string;
@@ -708,9 +639,9 @@ export interface components {
             granularity: "day" | "month";
         };
         /** @enum {string} */
-        GateOpsUsageReportDimensionKey: "bucket_start" | "billing_account_id" | "feature_code" | "feature_family_code" | "meter_code" | "pricing_fingerprint" | "cost_fingerprint" | "attribution_kind" | "attribution_id";
+        GateOpsUsageReportDimensionKey: "bucket_start" | "billing_account_id" | "billing_user_id" | "feature_code" | "feature_family_code" | "meter_code" | "pricing_fingerprint" | "cost_fingerprint" | "attribution_kind" | "attribution_id";
         /** @enum {string} */
-        GateOpsUsageReportMetricKey: "quantity_minor" | "amount_xusd" | "cost_xusd" | "margin_xusd" | "commit_count" | "line_count" | "distinct_billing_account_count";
+        GateOpsUsageReportMetricKey: "quantity_minor" | "amount_xusd" | "cost_xusd" | "margin_xusd" | "commit_count" | "line_count" | "distinct_billing_account_count" | "distinct_billing_user_count";
         GateOpsUsageReportDimensionFilter: {
             field: components["schemas"]["GateOpsUsageReportDimensionKey"];
             /** @enum {string} */
@@ -738,7 +669,7 @@ export interface components {
              * @enum {string}
              */
             compare?: "previous";
-            /** @description Limit results to the top N dimension values ranked by order_by_metric over the full time range. Supported only when group_by includes bucket_start and exactly one of feature_code/feature_family_code. With aggregate=group_total, top_k also supports attribution_id (requires attribution_kind=plan) and billing_account_id (time window <= 90 days, top_k <= 50, and metrics limited to amount_xusd/cost_xusd/margin_xusd). Not supported with cursor or compare. */
+            /** @description Limit results to the top N dimension values ranked by order_by_metric over the full time range. Supported only when group_by includes bucket_start and exactly one of feature_code/feature_family_code. With aggregate=group_total, top_k also supports attribution_id (requires attribution_kind=plan) and billing_account_id or billing_user_id (time window <= 90 days, top_k <= 50, and metrics limited to amount_xusd/cost_xusd/margin_xusd). Not supported with cursor or compare. */
             top_k?: number;
             /** @description Metric used to rank top_k results. Defaults to the first metric in metrics. */
             order_by_metric?: components["schemas"]["GateOpsUsageReportMetricKey"];
@@ -757,6 +688,7 @@ export interface components {
             /** Format: date-time */
             bucket_start: string;
             billing_account_id?: string;
+            billing_user_id?: string;
             feature_code?: string;
             feature_family_code?: string;
             meter_code?: string;
@@ -779,6 +711,8 @@ export interface components {
             line_count?: number;
             /** Format: int64 */
             distinct_billing_account_count?: number;
+            /** Format: int64 */
+            distinct_billing_user_count?: number;
         };
         GateOpsUsageReportResult: {
             /** @enum {string} */
@@ -806,7 +740,7 @@ export interface components {
             meta?: components["schemas"]["GateOpsUsageReportMeta"];
         };
         /** @enum {string} */
-        GateOpsSettlementReportDimensionKey: "bucket_start" | "billing_account_id" | "feature_code" | "feature_family_code" | "funding_kind" | "application_status" | "budget_id" | "grant_id" | "grant_program_id" | "pricing_fingerprint" | "settlement_state";
+        GateOpsSettlementReportDimensionKey: "bucket_start" | "billing_account_id" | "billing_user_id" | "feature_code" | "feature_family_code" | "funding_kind" | "application_status" | "budget_id" | "grant_id" | "grant_program_id" | "pricing_fingerprint" | "settlement_state";
         /** @enum {string} */
         GateOpsSettlementReportMetricKey: "allocated_amount_xusd" | "applied_amount_xusd" | "applied_cost_xusd" | "settlement_count";
         GateOpsSettlementReportDimensionFilter: {
@@ -825,7 +759,7 @@ export interface components {
             time: components["schemas"]["GateReportTimeRange"];
             /** @description Dimension keys to group by. bucket_start will be auto-added if missing.
              *     Supported combinations (after sorting/dedup) are limited to:
-             *     ['bucket_start'], ['bucket_start','funding_kind'], ['bucket_start','billing_account_id'],
+             *     ['bucket_start'], ['bucket_start','funding_kind'], ['bucket_start','billing_account_id'], ['bucket_start','billing_user_id'],
              *     ['bucket_start','feature_code'], ['bucket_start','grant_id'], ['bucket_start','grant_program_id'], ['bucket_start','budget_id'],
              *     ['bucket_start','application_status'], ['bucket_start','funding_kind','application_status'], ['bucket_start','feature_code','funding_kind'],
              *     ['bucket_start','grant_program_id','funding_kind']. */
@@ -840,6 +774,7 @@ export interface components {
             /** Format: date-time */
             bucket_start: string;
             billing_account_id?: string;
+            billing_user_id?: string;
             feature_code?: string;
             feature_family_code?: string;
             funding_kind?: string;
@@ -949,10 +884,10 @@ export interface components {
         IdempotencyKeyRequired: string;
         /** @description Optional request correlation ID. The server may echo or override it. */
         XRequestId: string;
-        /** @description Optional principal identifier used to resolve the billing account. You may send it with X-Billing-Account-Id or by itself. For account-scoped endpoints, send at least one of X-Principal-Id or X-Billing-Account-Id. If you send both, they must resolve to the same billing account in the realm. */
-        PrincipalIdHeader: string;
-        /** @description Optional billing account context. You may send it with X-Principal-Id or by itself. For account-scoped endpoints, send at least one of X-Principal-Id or X-Billing-Account-Id. If you send both, they must refer to the same billing account in the realm. */
-        BillingAccountIdHeader: string;
+        /** @description External payor principal identifier used to resolve the billing account for runtime calls. */
+        PrincipalIdHeaderRequired: string;
+        /** @description External runtime user identifier scoped by the billing account for runtime calls. */
+        UserIdHeaderRequired: string;
         /** @description Body integrity digest. Format: sha-256=:<BASE64(SHA256(raw_body_bytes))>: */
         ContentDigestHeader: string;
     };
@@ -966,10 +901,10 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
-                /** @description Optional principal identifier used to resolve the billing account. You may send it with X-Billing-Account-Id or by itself. For account-scoped endpoints, send at least one of X-Principal-Id or X-Billing-Account-Id. If you send both, they must resolve to the same billing account in the realm. */
-                "X-Principal-Id"?: components["parameters"]["PrincipalIdHeader"];
-                /** @description Optional billing account context. You may send it with X-Principal-Id or by itself. For account-scoped endpoints, send at least one of X-Principal-Id or X-Billing-Account-Id. If you send both, they must refer to the same billing account in the realm. */
-                "X-Billing-Account-Id"?: components["parameters"]["BillingAccountIdHeader"];
+                /** @description External payor principal identifier used to resolve the billing account for runtime calls. */
+                "X-Principal-Id": components["parameters"]["PrincipalIdHeaderRequired"];
+                /** @description External runtime user identifier scoped by the billing account for runtime calls. */
+                "X-User-Id": components["parameters"]["UserIdHeaderRequired"];
                 /** @description Realm identifier for the project. Send it as X-Realm-Id. */
                 "X-Realm-Id": components["parameters"]["RealmIDHeader"];
                 /** @description Optional admin flag to enable realm-wide RLS for authorized callers. */
@@ -1020,10 +955,10 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
-                /** @description Optional principal identifier used to resolve the billing account. You may send it with X-Billing-Account-Id or by itself. For account-scoped endpoints, send at least one of X-Principal-Id or X-Billing-Account-Id. If you send both, they must resolve to the same billing account in the realm. */
-                "X-Principal-Id"?: components["parameters"]["PrincipalIdHeader"];
-                /** @description Optional billing account context. You may send it with X-Principal-Id or by itself. For account-scoped endpoints, send at least one of X-Principal-Id or X-Billing-Account-Id. If you send both, they must refer to the same billing account in the realm. */
-                "X-Billing-Account-Id"?: components["parameters"]["BillingAccountIdHeader"];
+                /** @description External payor principal identifier used to resolve the billing account for runtime calls. */
+                "X-Principal-Id": components["parameters"]["PrincipalIdHeaderRequired"];
+                /** @description External runtime user identifier scoped by the billing account for runtime calls. */
+                "X-User-Id": components["parameters"]["UserIdHeaderRequired"];
                 /** @description Realm identifier for the project. Send it as X-Realm-Id. */
                 "X-Realm-Id": components["parameters"]["RealmIDHeader"];
                 /** @description Optional admin flag to enable realm-wide RLS for authorized callers. */
@@ -1064,10 +999,10 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
-                /** @description Optional principal identifier used to resolve the billing account. You may send it with X-Billing-Account-Id or by itself. For account-scoped endpoints, send at least one of X-Principal-Id or X-Billing-Account-Id. If you send both, they must resolve to the same billing account in the realm. */
-                "X-Principal-Id"?: components["parameters"]["PrincipalIdHeader"];
-                /** @description Optional billing account context. You may send it with X-Principal-Id or by itself. For account-scoped endpoints, send at least one of X-Principal-Id or X-Billing-Account-Id. If you send both, they must refer to the same billing account in the realm. */
-                "X-Billing-Account-Id"?: components["parameters"]["BillingAccountIdHeader"];
+                /** @description External payor principal identifier used to resolve the billing account for runtime calls. */
+                "X-Principal-Id": components["parameters"]["PrincipalIdHeaderRequired"];
+                /** @description External runtime user identifier scoped by the billing account for runtime calls. */
+                "X-User-Id": components["parameters"]["UserIdHeaderRequired"];
                 /** @description Realm identifier for the project. Send it as X-Realm-Id. */
                 "X-Realm-Id": components["parameters"]["RealmIDHeader"];
                 /** @description Optional admin flag to enable realm-wide RLS for authorized callers. */
@@ -1107,10 +1042,10 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
-                /** @description Optional principal identifier used to resolve the billing account. You may send it with X-Billing-Account-Id or by itself. For account-scoped endpoints, send at least one of X-Principal-Id or X-Billing-Account-Id. If you send both, they must resolve to the same billing account in the realm. */
-                "X-Principal-Id"?: components["parameters"]["PrincipalIdHeader"];
-                /** @description Optional billing account context. You may send it with X-Principal-Id or by itself. For account-scoped endpoints, send at least one of X-Principal-Id or X-Billing-Account-Id. If you send both, they must refer to the same billing account in the realm. */
-                "X-Billing-Account-Id"?: components["parameters"]["BillingAccountIdHeader"];
+                /** @description External payor principal identifier used to resolve the billing account for runtime calls. */
+                "X-Principal-Id": components["parameters"]["PrincipalIdHeaderRequired"];
+                /** @description External runtime user identifier scoped by the billing account for runtime calls. */
+                "X-User-Id": components["parameters"]["UserIdHeaderRequired"];
                 /** @description Realm identifier for the project. Send it as X-Realm-Id. */
                 "X-Realm-Id": components["parameters"]["RealmIDHeader"];
                 /** @description Optional admin flag to enable realm-wide RLS for authorized callers. */
@@ -1150,10 +1085,10 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
-                /** @description Optional principal identifier used to resolve the billing account. You may send it with X-Billing-Account-Id or by itself. For account-scoped endpoints, send at least one of X-Principal-Id or X-Billing-Account-Id. If you send both, they must resolve to the same billing account in the realm. */
-                "X-Principal-Id"?: components["parameters"]["PrincipalIdHeader"];
-                /** @description Optional billing account context. You may send it with X-Principal-Id or by itself. For account-scoped endpoints, send at least one of X-Principal-Id or X-Billing-Account-Id. If you send both, they must refer to the same billing account in the realm. */
-                "X-Billing-Account-Id"?: components["parameters"]["BillingAccountIdHeader"];
+                /** @description External payor principal identifier used to resolve the billing account for runtime calls. */
+                "X-Principal-Id": components["parameters"]["PrincipalIdHeaderRequired"];
+                /** @description External runtime user identifier scoped by the billing account for runtime calls. */
+                "X-User-Id": components["parameters"]["UserIdHeaderRequired"];
                 /** @description Realm identifier for the project. Send it as X-Realm-Id. */
                 "X-Realm-Id": components["parameters"]["RealmIDHeader"];
                 /** @description Optional admin flag to enable realm-wide RLS for authorized callers. */
@@ -1201,10 +1136,10 @@ export interface operations {
                 expand?: ("quotas" | "rates")[];
             };
             header: {
-                /** @description Optional principal identifier used to resolve the billing account. You may send it with X-Billing-Account-Id or by itself. For account-scoped endpoints, send at least one of X-Principal-Id or X-Billing-Account-Id. If you send both, they must resolve to the same billing account in the realm. */
-                "X-Principal-Id"?: components["parameters"]["PrincipalIdHeader"];
-                /** @description Optional billing account context. You may send it with X-Principal-Id or by itself. For account-scoped endpoints, send at least one of X-Principal-Id or X-Billing-Account-Id. If you send both, they must refer to the same billing account in the realm. */
-                "X-Billing-Account-Id"?: components["parameters"]["BillingAccountIdHeader"];
+                /** @description External payor principal identifier used to resolve the billing account for runtime calls. */
+                "X-Principal-Id": components["parameters"]["PrincipalIdHeaderRequired"];
+                /** @description External runtime user identifier scoped by the billing account for runtime calls. */
+                "X-User-Id": components["parameters"]["UserIdHeaderRequired"];
                 /** @description Realm identifier for the project. Send it as X-Realm-Id. */
                 "X-Realm-Id": components["parameters"]["RealmIDHeader"];
                 /** @description Optional admin flag to enable realm-wide RLS for authorized callers. */
@@ -1254,10 +1189,10 @@ export interface operations {
                 "coverage.as_of"?: string;
             };
             header: {
-                /** @description Optional principal identifier used to resolve the billing account. You may send it with X-Billing-Account-Id or by itself. For account-scoped endpoints, send at least one of X-Principal-Id or X-Billing-Account-Id. If you send both, they must resolve to the same billing account in the realm. */
-                "X-Principal-Id"?: components["parameters"]["PrincipalIdHeader"];
-                /** @description Optional billing account context. You may send it with X-Principal-Id or by itself. For account-scoped endpoints, send at least one of X-Principal-Id or X-Billing-Account-Id. If you send both, they must refer to the same billing account in the realm. */
-                "X-Billing-Account-Id"?: components["parameters"]["BillingAccountIdHeader"];
+                /** @description External payor principal identifier used to resolve the billing account for runtime calls. */
+                "X-Principal-Id": components["parameters"]["PrincipalIdHeaderRequired"];
+                /** @description External runtime user identifier scoped by the billing account for runtime calls. */
+                "X-User-Id": components["parameters"]["UserIdHeaderRequired"];
                 /** @description Realm identifier for the project. Send it as X-Realm-Id. */
                 "X-Realm-Id": components["parameters"]["RealmIDHeader"];
                 /** @description Optional admin flag to enable realm-wide RLS for authorized callers. */
@@ -1280,119 +1215,6 @@ export interface operations {
                 };
             };
             401: components["responses"]["Unauthorized"];
-        };
-    };
-    listSeats: {
-        parameters: {
-            query: {
-                /** @description Feature code for the seat pool. */
-                feature_code: string;
-            };
-            header: {
-                /** @description Realm identifier for the project. Send it as X-Realm-Id. */
-                "X-Realm-Id": components["parameters"]["RealmIDHeader"];
-                /** @description Optional admin flag to enable realm-wide RLS for authorized callers. */
-                "X-Realm-Admin"?: components["parameters"]["RealmAdminHeader"];
-                /** @description Optional request correlation ID. The server may echo or override it. */
-                "X-Request-Id"?: components["parameters"]["XRequestId"];
-                /** @description Optional principal identifier used to resolve the billing account. You may send it with X-Billing-Account-Id or by itself. For account-scoped endpoints, send at least one of X-Principal-Id or X-Billing-Account-Id. If you send both, they must resolve to the same billing account in the realm. */
-                "X-Principal-Id"?: components["parameters"]["PrincipalIdHeader"];
-                /** @description Optional billing account context. You may send it with X-Principal-Id or by itself. For account-scoped endpoints, send at least one of X-Principal-Id or X-Billing-Account-Id. If you send both, they must refer to the same billing account in the realm. */
-                "X-Billing-Account-Id"?: components["parameters"]["BillingAccountIdHeader"];
-            };
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description OK */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["SeatListEnvelope"];
-                };
-            };
-            401: components["responses"]["Unauthorized"];
-        };
-    };
-    revokeSeat: {
-        parameters: {
-            query?: never;
-            header: {
-                /** @description Realm identifier for the project. Send it as X-Realm-Id. */
-                "X-Realm-Id": components["parameters"]["RealmIDHeader"];
-                /** @description Optional admin flag to enable realm-wide RLS for authorized callers. */
-                "X-Realm-Admin"?: components["parameters"]["RealmAdminHeader"];
-                /** @description Required for authorize/commit/cancel. Repeating the same endpoint and key replays the first successful response. */
-                "Idempotency-Key": components["parameters"]["IdempotencyKeyRequired"];
-                /** @description Optional request correlation ID. The server may echo or override it. */
-                "X-Request-Id"?: components["parameters"]["XRequestId"];
-                /** @description Optional principal identifier used to resolve the billing account. You may send it with X-Billing-Account-Id or by itself. For account-scoped endpoints, send at least one of X-Principal-Id or X-Billing-Account-Id. If you send both, they must resolve to the same billing account in the realm. */
-                "X-Principal-Id"?: components["parameters"]["PrincipalIdHeader"];
-                /** @description Optional billing account context. You may send it with X-Principal-Id or by itself. For account-scoped endpoints, send at least one of X-Principal-Id or X-Billing-Account-Id. If you send both, they must refer to the same billing account in the realm. */
-                "X-Billing-Account-Id"?: components["parameters"]["BillingAccountIdHeader"];
-            };
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["SeatActionRequest"];
-            };
-        };
-        responses: {
-            /** @description OK */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["SeatActionEnvelope"];
-                };
-            };
-            401: components["responses"]["Unauthorized"];
-            422: components["responses"]["UnprocessableEntity"];
-        };
-    };
-    restoreSeat: {
-        parameters: {
-            query?: never;
-            header: {
-                /** @description Realm identifier for the project. Send it as X-Realm-Id. */
-                "X-Realm-Id": components["parameters"]["RealmIDHeader"];
-                /** @description Optional admin flag to enable realm-wide RLS for authorized callers. */
-                "X-Realm-Admin"?: components["parameters"]["RealmAdminHeader"];
-                /** @description Required for authorize/commit/cancel. Repeating the same endpoint and key replays the first successful response. */
-                "Idempotency-Key": components["parameters"]["IdempotencyKeyRequired"];
-                /** @description Optional request correlation ID. The server may echo or override it. */
-                "X-Request-Id"?: components["parameters"]["XRequestId"];
-                /** @description Optional principal identifier used to resolve the billing account. You may send it with X-Billing-Account-Id or by itself. For account-scoped endpoints, send at least one of X-Principal-Id or X-Billing-Account-Id. If you send both, they must resolve to the same billing account in the realm. */
-                "X-Principal-Id"?: components["parameters"]["PrincipalIdHeader"];
-                /** @description Optional billing account context. You may send it with X-Principal-Id or by itself. For account-scoped endpoints, send at least one of X-Principal-Id or X-Billing-Account-Id. If you send both, they must refer to the same billing account in the realm. */
-                "X-Billing-Account-Id"?: components["parameters"]["BillingAccountIdHeader"];
-            };
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["SeatActionRequest"];
-            };
-        };
-        responses: {
-            /** @description OK */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["SeatActionEnvelope"];
-                };
-            };
-            401: components["responses"]["Unauthorized"];
-            422: components["responses"]["UnprocessableEntity"];
         };
     };
     gateOpsQueryUsageReports: {
@@ -1467,7 +1289,7 @@ export interface operations {
             429: components["responses"]["TooManyRequests"];
         };
     };
-    gateUsageReportsByAccount: {
+    gateUsageReportsSelf: {
         parameters: {
             query?: never;
             header: {
@@ -1501,7 +1323,7 @@ export interface operations {
             422: components["responses"]["UnprocessableEntity"];
         };
     };
-    gateSettlementReportsByAccount: {
+    gateSettlementReportsSelf: {
         parameters: {
             query?: never;
             header: {

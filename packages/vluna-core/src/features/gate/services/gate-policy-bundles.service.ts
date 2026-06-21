@@ -4,6 +4,7 @@ import { sql } from 'kysely'
 import { setRlsSession } from '../../../db/index.js'
 import type { AppRequest } from '../../../types/app-request.js'
 import type { Database } from '../../../types/database.js'
+import { invalidateGateRuntimeCaches } from './quota.service.js'
 
 type GatePolicyBundle = {
   bundle_id: string
@@ -178,6 +179,7 @@ export class GatePolicyBundlesService {
       .returning(['bundle_id', 'bundle_key', 'name', 'status', 'metadata', 'created_at', 'updated_at'])
       .executeTakeFirstOrThrow()
 
+    invalidateGateRuntimeCaches()
     return {
       created: !existing,
       bundle: {
@@ -235,6 +237,7 @@ export class GatePolicyBundlesService {
       .returning(['bundle_id', 'bundle_key', 'name', 'status', 'metadata', 'created_at', 'updated_at'])
       .executeTakeFirstOrThrow()
 
+    invalidateGateRuntimeCaches()
     return {
       bundle_id: String(row.bundle_id),
       bundle_key: String(row.bundle_key),
@@ -270,6 +273,7 @@ export class GatePolicyBundlesService {
       .where('bundle_id', '=', id)
       .executeTakeFirst()
 
+    invalidateGateRuntimeCaches()
     return { deleted: true }
   }
 

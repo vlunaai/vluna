@@ -4,7 +4,7 @@ import { RealmGuard } from '../../../auth/guards/realm.guard.js'
 import { IdempotencyInterceptor } from '../../../support/idempotency.interceptor.js'
 import { okEnvelope } from '../../../common/envelope.js'
 import { ServiceAuthGuard } from '../../../auth/guards/service-auth.guard.js'
-import { ServiceAccountGuard } from '../../../auth/guards/service-account.guard.js'
+import { ServiceRuntimeUserGuard } from '../../../auth/guards/service-runtime-user.guard.js'
 import { AuthRequiredGuard } from '../../../auth/guards/auth-required.guard.js'
 import { TokenClaimsGuard } from '../../../auth/guards/token-claims.guard.js'
 import { RealmMembershipGuard } from '../../../auth/guards/realm-membership.guard.js'
@@ -25,7 +25,7 @@ type BatchBody = JsonRequestBody<BillingOps, 'recordBillingEventBatch'>
 type Batch207 = JsonResponse<BillingOps, 'recordBillingEventBatch', 207>
 
 @Controller()
-@UseGuards(RealmGuard, AuthRequiredGuard, ServiceAuthGuard, TokenClaimsGuard, RealmMembershipGuard, ServiceAccountGuard)
+@UseGuards(RealmGuard, AuthRequiredGuard, ServiceAuthGuard, TokenClaimsGuard, RealmMembershipGuard, ServiceRuntimeUserGuard)
 export class BillingEventsController {
   constructor(@Inject(EventToRatingsService) private readonly eventToRatingsService: EventToRatingsService) {}
 
@@ -38,10 +38,11 @@ export class BillingEventsController {
     @Body() body: BillingEventBody,
   ): Promise<BillingEventEnvelope> {
     const realmId = req.ctx?.realmId
+    const ctxUser = req.ctx?.billingUserId
     const ctxAccount = req.ctx?.billingAccountId
     const db = req.ctx?.db
-    if (!ctxAccount) {
-      throw new HttpException({ code: 'VALIDATION.INVALID_INPUT', message: 'billing_account_id is required' }, 422)
+    if (!ctxUser || !ctxAccount) {
+      throw new HttpException({ code: 'VALIDATION.INVALID_INPUT', message: 'billing_user_id and billing_account_id are required' }, 422)
     }
     if (!db) {
       throw new HttpException({ code: 'SERVER.CONFIG', message: 'database unavailable' }, 500)
@@ -49,17 +50,20 @@ export class BillingEventsController {
 
     const { created, event } = await BillingEventsService.ingestEvent(db, realmId, {
       ...body,
+      billing_user_id: ctxUser,
       billing_account_id: ctxAccount,
     }, body?.labels)
 
     if (created && realmId) {
       await this.eventToRatingsService.enqueueEvent(db, {
         realmId,
+        billingUserId: ctxUser,
         billingAccountId: ctxAccount,
         eventId: String(event.event_id),
       })
       await this.eventToRatingsService.processSingleEventIfEnabledFromApi(db, {
         realmId,
+        billingUserId: ctxUser,
         billingAccountId: ctxAccount,
         eventId: String(event.event_id),
       })
@@ -88,10 +92,11 @@ export class BillingEventsController {
     let acceptedCount = 0
     let failedCount = 0
     const pending: BatchIngestItemInput[] = []
+    const ctxUser = req.ctx?.billingUserId
     const ctxAccount = req.ctx?.billingAccountId
 
-    if (!ctxAccount) {
-      throw new HttpException({ code: 'VALIDATION.INVALID_INPUT', message: 'billing_account_id is required' }, 422)
+    if (!ctxUser || !ctxAccount) {
+      throw new HttpException({ code: 'VALIDATION.INVALID_INPUT', message: 'billing_user_id and billing_account_id are required' }, 422)
     }
     if (!db) {
       throw new HttpException({ code: 'SERVER.CONFIG', message: 'database unavailable' }, 500)
@@ -101,7 +106,7 @@ export class BillingEventsController {
       const rawEvent = incoming[index] || ({} as BillingEventBody)
       pending.push({
         index,
-        payload: { ...rawEvent, billing_account_id: ctxAccount },
+        payload: { ...rawEvent, billing_user_id: ctxUser, billing_account_id: ctxAccount },
         labels: rawEvent?.labels,
       })
     }
@@ -118,6 +123,7 @@ export class BillingEventsController {
             if (item.status !== 'accepted' || !item.event_id) continue
             await this.eventToRatingsService.enqueueEvent(db, {
               realmId,
+              billingUserId: ctxUser,
               billingAccountId: ctxAccount,
               eventId: String(item.event_id),
             })

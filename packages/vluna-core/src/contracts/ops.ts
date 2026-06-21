@@ -378,13 +378,13 @@ export interface paths {
         };
         /**
          * List grants
-         * @description List ledger_grants lots for a billing account or across a realm, with optional filters.
+         * @description List ledger_grants lots for a billing user, a billing account aggregate, or across a realm, with optional filters.
          */
         get: operations["listGrants"];
         put?: never;
         /**
          * Create grant
-         * @description Create a grant issuance for a billing account.
+         * @description Create a grant issuance for a billing user under a billing account.
          */
         post: operations["createGrant"];
         delete?: never;
@@ -779,12 +779,14 @@ export interface components {
         GrantCampaignDeleteEnvelope: components["schemas"]["EnvelopeBase"] & {
             data: components["schemas"]["GrantCampaignDeleteResult"];
         };
-        /** @description Assignment that attaches a grant program to a billing account and source (e.g. subscription). */
+        /** @description Assignment that attaches a grant program to a billing user under a billing account and source (e.g. subscription). */
         GrantAssignment: {
             /** @description Numeric assignment identifier (string-encoded). */
             assignment_id: string;
             /** Format: uuid */
             billing_account_id: string;
+            /** Format: uuid */
+            billing_user_id: string;
             /** @description Numeric grant program identifier (string-encoded). */
             program_id: string;
             /** @description Grant program code, if resolvable. */
@@ -793,7 +795,7 @@ export interface components {
              * @description Provenance for this binding.
              * @enum {string}
              */
-            source_kind: "provider.subscription" | "provider.subscription_item" | "provider.one_time" | "wallet.cash" | "ops.manual" | "internal.catalog";
+            source_kind: "provider.subscription" | "provider.subscription_item" | "provider.one_time" | "wallet.cash" | "ops.campaign" | "ops.manual" | "internal.catalog" | "billing_plan_assignment";
             /** @description Provider-side identifier; opaque to billing (e.g. subscription id). */
             source_ref: string;
             /** Format: date-time */
@@ -808,13 +810,15 @@ export interface components {
             /** Format: date-time */
             updated_at?: string;
         };
-        /** @description Create a new grant assignment for a billing account and source. */
+        /** @description Create a new grant assignment for a billing user and source. */
         GrantAssignmentCreateRequest: {
             /** Format: uuid */
             billing_account_id: string;
+            /** Format: uuid */
+            billing_user_id: string;
             program_id: string;
             /** @enum {string} */
-            source_kind: "provider.subscription" | "provider.subscription_item" | "provider.one_time" | "wallet.cash" | "ops.manual" | "internal.catalog";
+            source_kind: "provider.subscription" | "provider.subscription_item" | "provider.one_time" | "wallet.cash" | "ops.campaign" | "ops.manual" | "internal.catalog" | "billing_plan_assignment";
             source_ref: string;
             /** Format: date-time */
             window_start: string;
@@ -844,6 +848,8 @@ export interface components {
             grant_id: string;
             /** Format: uuid */
             billing_account_id: string;
+            /** Format: uuid */
+            billing_user_id: string;
             /** @description Owning ledger account id, if any. */
             ledger_id?: string;
             assignment_id?: string;
@@ -901,10 +907,12 @@ export interface components {
         LedgerGrantAdminList: {
             items?: components["schemas"]["LedgerGrantAdminView"][];
         };
-        /** @description Create a grant issuance for a billing account. */
+        /** @description Create a grant issuance for a billing user under a billing account. */
         GrantCreateRequest: {
             /** Format: uuid */
             billing_account_id: string;
+            /** Format: uuid */
+            billing_user_id: string;
             /**
              * @description Optional semantic category override for the issued grant.
              * @enum {string}
@@ -952,6 +960,8 @@ export interface components {
             grant_id: string;
             /** Format: uuid */
             billing_account_id: string;
+            /** Format: uuid */
+            billing_user_id: string;
             /** Format: date-time */
             occurred_at: string;
             /** @description Consumed amount in XUSD minor units (integer string backed by bigint). */
@@ -990,6 +1000,8 @@ export interface components {
             realm_id: string;
             /** Format: uuid */
             billing_account_id: string;
+            /** Format: uuid */
+            billing_user_id: string;
             /** @enum {string} */
             semantic_kind: "activity" | "outcome";
             /** Format: date-time */
@@ -1017,6 +1029,8 @@ export interface components {
             realm_id: string;
             /** Format: uuid */
             billing_account_id: string;
+            /** Format: uuid */
+            billing_user_id: string;
             /** @enum {string} */
             rating_kind: "gate" | "ingest";
             idempotency_id: string;
@@ -1047,6 +1061,10 @@ export interface components {
         OpsRatedRecord: {
             rated_record_id: string;
             rating_id: string;
+            /** Format: uuid */
+            billing_account_id: string;
+            /** Format: uuid */
+            billing_user_id: string;
             meter_code: string;
             quantity_minor: string;
             amount_xusd: string;
@@ -1079,6 +1097,8 @@ export interface components {
             realm_id: string;
             /** Format: uuid */
             billing_account_id: string;
+            /** Format: uuid */
+            billing_user_id: string;
             /** @enum {string} */
             attribution_kind: "plan_assignment" | "plan" | "subscription_item" | "subscription";
             attribution_id: string;
@@ -1201,8 +1221,6 @@ export interface components {
             recurring_count?: number | null;
             display_priority?: number;
             metadata?: components["schemas"]["OpsCatalogPriceMetadata"];
-            /** Format: uuid */
-            subscription_group_id?: string | null;
             subscription_group_key?: string | null;
         };
         OpsCatalogPriceUpdateRequest: {
@@ -1315,6 +1333,8 @@ export interface components {
             direction: "debit" | "credit";
             /** Format: uuid */
             billing_account_id: string;
+            /** Format: uuid */
+            billing_user_id: string;
             budget_id?: string | null;
             feature_code: string;
             pricing_fingerprint?: string | null;
@@ -1966,6 +1986,7 @@ export interface operations {
         parameters: {
             query?: {
                 billing_account_id?: string;
+                billing_user_id?: string;
                 semantic_kind?: "activity" | "outcome";
                 event_type?: string[];
                 subject_ref?: string;
@@ -2014,6 +2035,7 @@ export interface operations {
         parameters: {
             query?: {
                 billing_account_id?: string;
+                billing_user_id?: string;
                 expand?: "labels"[];
             };
             header: {
@@ -2054,6 +2076,7 @@ export interface operations {
         parameters: {
             query?: {
                 billing_account_id?: string;
+                billing_user_id?: string;
                 rating_kind?: "gate" | "ingest";
                 meter_code?: string;
                 feature_code?: string;
@@ -2105,6 +2128,7 @@ export interface operations {
         parameters: {
             query?: {
                 billing_account_id?: string;
+                billing_user_id?: string;
                 expand?: "rated_records"[];
             };
             header: {
@@ -2145,6 +2169,7 @@ export interface operations {
         parameters: {
             query?: {
                 billing_account_id?: string;
+                billing_user_id?: string;
                 rating_id?: string;
                 attribution_kind?: "plan_assignment" | "plan" | "subscription_item" | "subscription";
                 attribution_id?: string;
@@ -2188,6 +2213,7 @@ export interface operations {
         parameters: {
             query?: {
                 billing_account_id?: string;
+                billing_user_id?: string;
             };
             header: {
                 /** @description Realm identifier for the project. Send it as X-Realm-Id. */
@@ -2262,6 +2288,7 @@ export interface operations {
         parameters: {
             query?: {
                 billing_account_id?: string;
+                billing_user_id?: string;
                 rating_id?: string;
                 meter_code?: string;
                 feature_code?: string;
@@ -2311,6 +2338,7 @@ export interface operations {
         parameters: {
             query?: {
                 billing_account_id?: string;
+                billing_user_id?: string;
             };
             header: {
                 /** @description Realm identifier for the project. Send it as X-Realm-Id. */
@@ -2350,6 +2378,7 @@ export interface operations {
         parameters: {
             query?: {
                 billing_account_id?: string;
+                billing_user_id?: string;
                 rating_id?: string;
                 grant_id?: string;
                 budget_id?: string;
@@ -2409,6 +2438,7 @@ export interface operations {
         parameters: {
             query?: {
                 billing_account_id?: string;
+                billing_user_id?: string;
                 expand?: ("rating" | "rating.rated_records")[];
             };
             header: {
@@ -2634,6 +2664,7 @@ export interface operations {
                 limit?: components["parameters"]["Limit"];
                 cursor?: components["parameters"]["Cursor"];
                 billing_account_id?: string;
+                billing_user_id?: string;
                 program_id?: string;
                 campaign_id?: string;
                 grant_program_code?: string;
@@ -2828,9 +2859,10 @@ export interface operations {
             query?: {
                 limit?: components["parameters"]["Limit"];
                 cursor?: components["parameters"]["Cursor"];
-                /** @description Free-text search across grant_id, billing_account_id, program code/name, source ref, and metadata. */
+                /** @description Free-text search across grant_id, billing_account_id, billing_user_id, program code/name, source ref, and metadata. */
                 q?: string;
                 billing_account_id?: string;
+                billing_user_id?: string;
                 issuance_status?: ("ready" | "active" | "suspended" | "pending_close" | "closed" | "canceled")[];
                 grant_program_code?: string;
                 program_id?: string;
@@ -3028,6 +3060,7 @@ export interface operations {
                 limit?: components["parameters"]["Limit"];
                 cursor?: components["parameters"]["Cursor"];
                 billing_account_id?: string;
+                billing_user_id?: string;
                 status?: ("posted" | "reserved" | "reversed")[];
                 source_kind?: ("usage_event" | "settlement" | "manual_adjustment")[];
                 occurred_after?: string;

@@ -75,6 +75,7 @@ export type PricingComputation = {
 }
 
 export type ResidualBucketRow = {
+  billing_user_id: string
   billing_account_id: string
   meter_code: string
   pricing_fingerprint: string
@@ -846,6 +847,7 @@ export class PricingService {
   async loadResidualBucketRemainder(
     trx: Kysely<Database>,
     params: {
+      billingUserId: string
       billingAccountId: string
       meterCode: string
       pricingIdentity: string
@@ -854,9 +856,10 @@ export class PricingService {
     },
   ): Promise<bigint> {
     const row = await sql<ResidualBucketRow>`
-      SELECT billing_account_id, meter_code, pricing_fingerprint, denom, rounding, remainder_numer
+      SELECT billing_user_id, billing_account_id, meter_code, pricing_fingerprint, denom, rounding, remainder_numer
       FROM gate_residual_buckets
-      WHERE billing_account_id = ${params.billingAccountId}
+      WHERE billing_user_id = ${params.billingUserId}
+        AND billing_account_id = ${params.billingAccountId}
         AND meter_code = ${params.meterCode}
         AND pricing_fingerprint = ${params.pricingIdentity}
       FOR UPDATE
@@ -880,6 +883,7 @@ export class PricingService {
   async upsertResidualBucket(
     trx: Kysely<Database>,
     params: {
+      billingUserId: string
       billingAccountId: string
       meterCode: string
       pricingIdentity: string
@@ -892,6 +896,7 @@ export class PricingService {
     await trx
       .insertInto('gate_residual_buckets')
       .values({
+        billing_user_id: params.billingUserId,
         billing_account_id: params.billingAccountId,
         meter_code: params.meterCode,
         pricing_fingerprint: params.pricingIdentity,
@@ -902,7 +907,7 @@ export class PricingService {
       })
       .onConflict((oc) =>
         oc
-          .columns(['billing_account_id', 'meter_code', 'pricing_fingerprint'])
+          .columns(['billing_user_id', 'meter_code', 'pricing_fingerprint'])
           .doUpdateSet({
             denom: params.denom.toString(),
             rounding: params.rounding,

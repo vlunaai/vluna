@@ -8,7 +8,7 @@ import { AuthRequiredGuard } from '../../../auth/guards/auth-required.guard.js'
 import { TokenClaimsGuard } from '../../../auth/guards/token-claims.guard.js'
 import { RealmMembershipGuard } from '../../../auth/guards/realm-membership.guard.js'
 import { PrincipalGuard } from '../../../auth/guards/principal.guard.js'
-import { PrincipalBillingAccountGuard } from '../../../auth/guards/principal-billing-account.guard.js'
+import { BillingAccountGuard } from '../../../auth/guards/billing-account.guard.js'
 import { okEnvelope, errEnvelope } from '../../../common/envelope.js'
 import type { AppRequest } from '../../../types/app-request.js'
 import type { operations as OpsOps, components as OpsComponents } from '../../../contracts/ops.js'
@@ -71,7 +71,7 @@ type DeleteOpsCatalogPriceParams = PathParams<OpsOps, 'deleteOpsCatalogPrice'>
 type DeleteOpsCatalogPrice200 = JsonResponse<OpsOps, 'deleteOpsCatalogPrice', 200>
 
 @Controller('ops')
-@UseGuards(RealmGuard, AuthRequiredGuard, ServiceAuthGuard, TokenClaimsGuard, RealmMembershipGuard, ServiceAccountGuard, PrincipalGuard, PrincipalBillingAccountGuard)
+@UseGuards(RealmGuard, AuthRequiredGuard, ServiceAuthGuard, TokenClaimsGuard, RealmMembershipGuard, ServiceAccountGuard, PrincipalGuard, BillingAccountGuard)
 export class OpsController {
   @Get('reconciliations')
   async listReconciliations(@Req() req: AppRequest, @Query() q: ListRecsQuery): Promise<ListRecs200> {
@@ -932,6 +932,7 @@ export class OpsController {
   async listEvents(@Req() req: AppRequest, @Query() q: ListOpsEventsQuery): Promise<ListOpsEvents200> {
     const ctxBa = req?.ctx?.billingAccountId
     const reqBa = String(q?.billing_account_id || '')
+    const reqBu = String(q?.billing_user_id || '')
     const allowCrossAccount = allowCrossAccountAccess(req?.ctx)
     const targetBa = allowCrossAccount ? (reqBa || undefined) : ctxBa
     if (!allowCrossAccount && (!ctxBa || ctxBa !== reqBa)) {
@@ -962,6 +963,7 @@ export class OpsController {
         'be.event_id',
         'be.realm_id',
         'be.billing_account_id',
+        'be.billing_user_id',
         'be.semantic_kind',
         'be.occurred_at',
         'be.event_type',
@@ -976,6 +978,9 @@ export class OpsController {
 
     if (targetBa) {
       query = query.where('be.billing_account_id', '=', targetBa)
+    }
+    if (reqBu) {
+      query = query.where('be.billing_user_id', '=', reqBu)
     }
     if (q?.semantic_kind) {
       query = query.where('be.semantic_kind', '=', q.semantic_kind)
@@ -1012,6 +1017,7 @@ export class OpsController {
       event_id: String(row.event_id),
       realm_id: String(row.realm_id),
       billing_account_id: String(row.billing_account_id),
+      billing_user_id: String(row.billing_user_id),
       semantic_kind: row.semantic_kind,
       occurred_at: toIso(row.occurred_at),
       event_type: row.event_type,
@@ -1035,6 +1041,7 @@ export class OpsController {
   ): Promise<GetOpsEvent200> {
     const ctxBa = req?.ctx?.billingAccountId
     const reqBa = String(q?.billing_account_id || '')
+    const reqBu = String(q?.billing_user_id || '')
     const allowCrossAccount = allowCrossAccountAccess(req?.ctx)
     const targetBa = allowCrossAccount ? (reqBa || undefined) : ctxBa
     if (!allowCrossAccount && (!ctxBa || ctxBa !== reqBa)) {
@@ -1060,6 +1067,7 @@ export class OpsController {
         'be.event_id',
         'be.realm_id',
         'be.billing_account_id',
+        'be.billing_user_id',
         'be.semantic_kind',
         'be.occurred_at',
         'be.event_type',
@@ -1073,6 +1081,9 @@ export class OpsController {
     if (targetBa) {
       query = query.where('be.billing_account_id', '=', targetBa)
     }
+    if (reqBu) {
+      query = query.where('be.billing_user_id', '=', reqBu)
+    }
 
     const row = await query.executeTakeFirst()
     if (!row) {
@@ -1084,6 +1095,7 @@ export class OpsController {
       event_id: String(row.event_id),
       realm_id: String(row.realm_id),
       billing_account_id: String(row.billing_account_id),
+      billing_user_id: String(row.billing_user_id),
       semantic_kind: row.semantic_kind,
       occurred_at: toIso(row.occurred_at),
       event_type: row.event_type,
@@ -1101,6 +1113,7 @@ export class OpsController {
   async listRatings(@Req() req: AppRequest, @Query() q: ListOpsRatingsQuery): Promise<ListOpsRatings200> {
     const ctxBa = req?.ctx?.billingAccountId
     const reqBa = String(q?.billing_account_id || '')
+    const reqBu = String(q?.billing_user_id || '')
     const allowCrossAccount = allowCrossAccountAccess(req?.ctx)
     const targetBa = allowCrossAccount ? (reqBa || undefined) : ctxBa
     if (!allowCrossAccount && (!ctxBa || ctxBa !== reqBa)) {
@@ -1129,6 +1142,7 @@ export class OpsController {
         'br.rating_id',
         'br.realm_id',
         'br.billing_account_id',
+        'br.billing_user_id',
         'br.rating_kind',
         'br.idempotency_id',
         'br.source_ref',
@@ -1153,6 +1167,9 @@ export class OpsController {
 
     if (targetBa) {
       query = query.where('br.billing_account_id', '=', targetBa)
+    }
+    if (reqBu) {
+      query = query.where('br.billing_user_id', '=', reqBu)
     }
     if (q?.rating_kind) {
       query = query.where('br.rating_kind', '=', q.rating_kind)
@@ -1200,6 +1217,7 @@ export class OpsController {
       rating_id: String(row.rating_id),
       realm_id: String(row.realm_id),
       billing_account_id: String(row.billing_account_id),
+      billing_user_id: String(row.billing_user_id),
       rating_kind: row.rating_kind,
       idempotency_id: String(row.idempotency_id),
       source_ref: row.source_ref ?? null,
@@ -1232,6 +1250,7 @@ export class OpsController {
   ): Promise<GetOpsRating200> {
     const ctxBa = req?.ctx?.billingAccountId
     const reqBa = String(q?.billing_account_id || '')
+    const reqBu = String(q?.billing_user_id || '')
     const allowCrossAccount = allowCrossAccountAccess(req?.ctx)
     const targetBa = allowCrossAccount ? (reqBa || undefined) : ctxBa
     if (!allowCrossAccount && (!ctxBa || ctxBa !== reqBa)) {
@@ -1255,6 +1274,7 @@ export class OpsController {
         'br.rating_id',
         'br.realm_id',
         'br.billing_account_id',
+        'br.billing_user_id',
         'br.rating_kind',
         'br.idempotency_id',
         'br.source_ref',
@@ -1278,6 +1298,9 @@ export class OpsController {
     if (targetBa) {
       query = query.where('br.billing_account_id', '=', targetBa)
     }
+    if (reqBu) {
+      query = query.where('br.billing_user_id', '=', reqBu)
+    }
 
     const expandSet = normalizeExpand(q?.expand)
     const includeRatedRecords = expandSet.has('rated_records')
@@ -1291,6 +1314,7 @@ export class OpsController {
       rating_id: String(row.rating_id),
       realm_id: String(row.realm_id),
       billing_account_id: String(row.billing_account_id),
+      billing_user_id: String(row.billing_user_id),
       rating_kind: row.rating_kind,
       idempotency_id: String(row.idempotency_id),
       source_ref: row.source_ref ?? null,
@@ -1439,6 +1463,7 @@ export class OpsController {
   ): Promise<ListOpsRatedRecords200> {
     const ctxBa = req?.ctx?.billingAccountId
     const reqBa = String(q?.billing_account_id || '')
+    const reqBu = String(q?.billing_user_id || '')
     const allowCrossAccount = allowCrossAccountAccess(req?.ctx)
     const targetBa = allowCrossAccount ? (reqBa || undefined) : ctxBa
     if (!allowCrossAccount && (!ctxBa || ctxBa !== reqBa)) {
@@ -1483,6 +1508,8 @@ export class OpsController {
         'brr.cost_fingerprint',
         'brr.metadata',
         'brr.created_at',
+        'br.billing_account_id as billing_account_id',
+        'br.billing_user_id as billing_user_id',
         'br.rated_at as rating_rated_at',
       ])
       .orderBy(sortBy === 'rated_at' ? 'br.rated_at' : 'brr.created_at', sortOrder)
@@ -1491,6 +1518,9 @@ export class OpsController {
 
     if (targetBa) {
       query = query.where('br.billing_account_id', '=', targetBa)
+    }
+    if (reqBu) {
+      query = query.where('br.billing_user_id', '=', reqBu)
     }
     if (q?.rating_id) {
       query = query.where(sql`brr.rating_id::text`, '=', String(q.rating_id))
@@ -1525,6 +1555,8 @@ export class OpsController {
     const records: OpsComponents['schemas']['OpsRatedRecord'][] = rows.slice(0, limit).map((row) => ({
       rated_record_id: String(row.rated_record_id),
       rating_id: String(row.rating_id),
+      billing_account_id: String(row.billing_account_id),
+      billing_user_id: String(row.billing_user_id),
       meter_code: row.meter_code,
       quantity_minor: String(row.quantity_minor),
       amount_xusd: String(row.amount_xusd),
@@ -1557,6 +1589,7 @@ export class OpsController {
   ): Promise<GetOpsRatedRecord200> {
     const ctxBa = req?.ctx?.billingAccountId
     const reqBa = String(q?.billing_account_id || '')
+    const reqBu = String(q?.billing_user_id || '')
     const allowCrossAccount = allowCrossAccountAccess(req?.ctx)
     const targetBa = allowCrossAccount ? (reqBa || undefined) : ctxBa
     if (!allowCrossAccount && (!ctxBa || ctxBa !== reqBa)) {
@@ -1596,11 +1629,16 @@ export class OpsController {
         'brr.cost_fingerprint',
         'brr.metadata',
         'brr.created_at',
+        'br.billing_account_id as billing_account_id',
+        'br.billing_user_id as billing_user_id',
       ])
       .where(sql`brr.rated_record_id::text`, '=', String(params.rated_record_id))
 
     if (targetBa) {
       query = query.where('br.billing_account_id', '=', targetBa)
+    }
+    if (reqBu) {
+      query = query.where('br.billing_user_id', '=', reqBu)
     }
 
     const row = await query.executeTakeFirst()
@@ -1611,6 +1649,8 @@ export class OpsController {
     const record: OpsComponents['schemas']['OpsRatedRecord'] = {
       rated_record_id: String(row.rated_record_id),
       rating_id: String(row.rating_id),
+      billing_account_id: String(row.billing_account_id),
+      billing_user_id: String(row.billing_user_id),
       meter_code: row.meter_code,
       quantity_minor: String(row.quantity_minor),
       amount_xusd: String(row.amount_xusd),
@@ -1636,6 +1676,7 @@ export class OpsController {
   async listAllocations(@Req() req: AppRequest, @Query() q: ListOpsAllocationsQuery): Promise<ListOpsAllocations200> {
     const ctxBa = req?.ctx?.billingAccountId
     const reqBa = String(q?.billing_account_id || '')
+    const reqBu = String(q?.billing_user_id || '')
     const allowCrossAccount = allowCrossAccountAccess(req?.ctx)
     const targetBa = allowCrossAccount ? (reqBa || undefined) : ctxBa
     if (!allowCrossAccount && (!ctxBa || ctxBa !== reqBa)) {
@@ -1669,6 +1710,7 @@ export class OpsController {
         'bra.rating_id',
         'bra.direction',
         'bra.billing_account_id',
+        'bra.billing_user_id',
         'bra.budget_id',
         'bra.feature_code',
         'bra.pricing_fingerprint',
@@ -1713,6 +1755,9 @@ export class OpsController {
 
     if (targetBa) {
       query = query.where('bra.billing_account_id', '=', targetBa)
+    }
+    if (reqBu) {
+      query = query.where('bra.billing_user_id', '=', reqBu)
     }
     if (q?.rating_id) {
       query = query.where(sql`bra.rating_id::text`, '=', String(q.rating_id))
@@ -1785,6 +1830,7 @@ export class OpsController {
       rating_id: String(row.rating_id),
       direction: row.direction,
       billing_account_id: String(row.billing_account_id),
+      billing_user_id: String(row.billing_user_id),
       budget_id: row.budget_id ? String(row.budget_id) : null,
       feature_code: row.feature_code,
       pricing_fingerprint: row.pricing_fingerprint ?? null,
@@ -1848,6 +1894,7 @@ export class OpsController {
   ): Promise<GetOpsAllocation200> {
     const ctxBa = req?.ctx?.billingAccountId
     const reqBa = String(q?.billing_account_id || '')
+    const reqBu = String(q?.billing_user_id || '')
     const allowCrossAccount = allowCrossAccountAccess(req?.ctx)
     const targetBa = allowCrossAccount ? (reqBa || undefined) : ctxBa
     if (!allowCrossAccount && (!ctxBa || ctxBa !== reqBa)) {
@@ -1873,6 +1920,7 @@ export class OpsController {
         'bra.rating_id',
         'bra.direction',
         'bra.billing_account_id',
+        'bra.billing_user_id',
         'bra.budget_id',
         'bra.feature_code',
         'bra.pricing_fingerprint',
@@ -1916,6 +1964,9 @@ export class OpsController {
     if (targetBa) {
       query = query.where('bra.billing_account_id', '=', targetBa)
     }
+    if (reqBu) {
+      query = query.where('bra.billing_user_id', '=', reqBu)
+    }
 
     const expandSet = normalizeExpand(q?.expand)
     const includeRating = expandSet.has('rating') || expandSet.has('rating.rated_records')
@@ -1932,6 +1983,7 @@ export class OpsController {
       rating_id: String(row.rating_id),
       direction: row.direction,
       billing_account_id: String(row.billing_account_id),
+      billing_user_id: String(row.billing_user_id),
       budget_id: row.budget_id ? String(row.budget_id) : null,
       feature_code: row.feature_code,
       pricing_fingerprint: row.pricing_fingerprint ?? null,
@@ -2326,6 +2378,7 @@ async function fetchRatingsByIds(
       'br.rating_id',
       'br.realm_id',
       'br.billing_account_id',
+      'br.billing_user_id',
       'br.rating_kind',
       'br.idempotency_id',
       'br.source_ref',
@@ -2355,6 +2408,7 @@ async function fetchRatingsByIds(
       rating_id: ratingId,
       realm_id: String(row.realm_id),
       billing_account_id: String(row.billing_account_id),
+      billing_user_id: String(row.billing_user_id),
       rating_kind: row.rating_kind,
       idempotency_id: row.idempotency_id,
       source_ref: row.source_ref ?? null,
@@ -2385,9 +2439,12 @@ async function fetchRatedRecordsByRatingIds(
   if (!db || ratingIds.length === 0) return new Map()
   const rows = await db
     .selectFrom('billing_rated_records as brr')
+    .innerJoin('billing_ratings as br', 'br.rating_id', 'brr.rating_id')
     .select([
       'brr.rated_record_id',
       'brr.rating_id',
+      'br.billing_account_id as billing_account_id',
+      'br.billing_user_id as billing_user_id',
       'brr.meter_code',
       'brr.quantity_minor',
       'brr.amount_xusd',
@@ -2415,6 +2472,8 @@ async function fetchRatedRecordsByRatingIds(
     list.push({
       rated_record_id: String(row.rated_record_id),
       rating_id: ratingId,
+      billing_account_id: String(row.billing_account_id),
+      billing_user_id: String(row.billing_user_id),
       meter_code: row.meter_code,
       quantity_minor: String(row.quantity_minor),
       amount_xusd: String(row.amount_xusd),

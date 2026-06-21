@@ -79,12 +79,16 @@ export class ServiceAuthGuard implements CanActivate {
     }
 
     const principalId = (verificationResult.verified.principalId || this.getHeader(headers, 'x-principal-id') || '').trim()
+    const userId = (verificationResult.verified.userId || this.getHeader(headers, 'x-user-id') || '').trim()
     const billingAccountId = (verificationResult.verified.billingAccountId || this.getHeader(headers, 'x-billing-account-id') || '').trim()
+    const billingUserId = (verificationResult.verified.billingUserId || this.getHeader(headers, 'x-billing-user-id') || '').trim()
 
     req.ctx.realmId = realmId
     req.ctx.serviceAuthBinding = {
       principalId: principalId || undefined,
+      userId: userId || undefined,
       billingAccountId: billingAccountId || undefined,
+      billingUserId: billingUserId || undefined,
     }
     req.ctx.isRealmAdmin = this.getHeader(headers, 'x-realm-admin')?.trim().toLowerCase() === 'true'
 
@@ -122,7 +126,7 @@ export class ServiceAuthGuard implements CanActivate {
     }
 
     const accountId = this.getHeader(headers, 'x-billing-account-id')
-    if (key.allowedAccounts.length > 0 && (!accountId || !key.allowedAccounts.includes(accountId))) {
+    if (key.allowedAccounts.length > 0 && accountId && !key.allowedAccounts.includes(accountId)) {
       throw new HttpException({ code: 'AUTH.SERVICE_KEY_ACCOUNT_FORBIDDEN', message: 'Service API key not authorized for billing account' }, 403)
     }
   }

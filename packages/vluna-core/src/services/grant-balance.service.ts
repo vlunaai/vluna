@@ -31,6 +31,7 @@ export type AccountGrantBalances = {
 }
 
 type BalanceQueryOptions = {
+  billingUserId: string
   billingAccountId: string
   asOf?: Date
   includeExpired?: boolean
@@ -62,6 +63,7 @@ export class GrantBalanceService {
         'g.ledger_id as ledger_id',
         'g.metadata as metadata',
       ])
+      .where('g.billing_user_id', '=', options.billingUserId)
       .where('g.billing_account_id', '=', options.billingAccountId)
       .where('g.issuance_status', 'in', includeSuspended ? ['ready', 'active', 'suspended'] : ['ready', 'active'])
 

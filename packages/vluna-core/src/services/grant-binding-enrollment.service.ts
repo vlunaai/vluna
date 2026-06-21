@@ -113,9 +113,13 @@ export class GrantBindingEnrollmentService {
           })
 
           const subs = await this.loadActiveSubscriptions(trx, account.billing_account_id)
+          const billingUserIds = await this.loadActiveBillingUserIds(trx, account.billing_account_id)
           let localBindings = 0
           let localProcessed = 0
           let localSkipped = 0
+          if (billingUserIds.length === 0) {
+            return { localBindings, localProcessed, localSkipped: profiles.length }
+          }
 
           for (const profile of profiles) {
             const eligibility = parseEligibility(profile)
@@ -137,18 +141,21 @@ export class GrantBindingEnrollmentService {
               continue
             }
 
-            await ensureGrantAssignment(trx, {
-              billingAccountId: account.billing_account_id,
-              programId: String(profile.program_id),
-              sourceKind: plan.sourceKind,
-              sourceRef: plan.sourceRef,
-              windowStart: plan.windowStart,
-              windowEnd: plan.windowEnd,
-              metadata: plan.metadata,
-              decidedAt: now,
-            })
+            for (const billingUserId of billingUserIds) {
+              await ensureGrantAssignment(trx, {
+                billingUserId,
+                billingAccountId: account.billing_account_id,
+                programId: String(profile.program_id),
+                sourceKind: plan.sourceKind,
+                sourceRef: plan.sourceRef,
+                windowStart: plan.windowStart,
+                windowEnd: plan.windowEnd,
+                metadata: plan.metadata,
+                decidedAt: now,
+              })
+              localBindings += 1
+            }
 
-            localBindings += 1
             localProcessed += 1
           }
 
@@ -209,6 +216,16 @@ export class GrantBindingEnrollmentService {
         current_period_start: row.current_period_start ?? null,
         current_period_end: row.current_period_end ?? null,
       }))
+  }
+
+  private async loadActiveBillingUserIds(trx: Transaction<Database>, billingAccountId: string): Promise<string[]> {
+    const rows = await trx
+      .selectFrom('billing_users')
+      .select(['billing_user_id'])
+      .where('billing_account_id', '=', billingAccountId)
+      .where('status', '=', 'active')
+      .execute()
+    return rows.map((row) => String(row.billing_user_id)).filter(Boolean)
   }
 
   private async buildPlanForAccount(

@@ -8,12 +8,12 @@ import type { LeaseRow } from './gate.types.js'
 export class LeaseService {
   async findIdempotentLease(
     trx: Kysely<Database>,
-    params: { idempotencyKey: string; billingAccountId: string },
+    params: { idempotencyKey: string; billingUserId: string },
   ): Promise<LeaseRow | undefined> {
     return await trx
       .selectFrom('gate_leases')
       .selectAll()
-      .where('billing_account_id', '=', params.billingAccountId)
+      .where('billing_user_id', '=', params.billingUserId)
       .where('idempotency_key', '=', params.idempotencyKey)
       .executeTakeFirst()
   }
@@ -21,6 +21,7 @@ export class LeaseService {
   async createLease(
     trx: Kysely<Database>,
     params: {
+      billingUserId: string
       billingAccountId: string
       policyId: string
       featureCode: string
@@ -36,6 +37,7 @@ export class LeaseService {
     const inserted = await trx
       .insertInto('gate_leases')
       .values({
+        billing_user_id: params.billingUserId,
         billing_account_id: params.billingAccountId,
         policy_id: params.policyId,
         feature_code: params.featureCode,
@@ -69,12 +71,13 @@ export class LeaseService {
 
   async findAndLockLeaseForCommit(
     trx: Kysely<Database>,
-    params: { leaseId: string; billingAccountId: string },
+    params: { leaseId: string; billingUserId: string; billingAccountId: string },
   ): Promise<LeaseRow> {
     const leaseRow = await sql<LeaseRow>`
         SELECT lease_id, policy_id, feature_code, cap_minor, state, expires_at, reservation_minor, budget_id, metadata, request_hash
         FROM gate_leases
         WHERE lease_id = ${params.leaseId}
+          AND billing_user_id = ${params.billingUserId}
           AND billing_account_id = ${params.billingAccountId}
         FOR UPDATE
       `
@@ -115,6 +118,7 @@ export class LeaseService {
     trx: Kysely<Database>,
     params: {
       leaseId: string
+      billingUserId: string
       billingAccountId: string
       traceId: string
     },
@@ -123,6 +127,7 @@ export class LeaseService {
       .selectFrom('gate_leases')
       .select(['lease_id', 'billing_account_id', 'state', 'reservation_minor', 'metadata'])
       .where('lease_id', '=', params.leaseId)
+      .where('billing_user_id', '=', params.billingUserId)
       .where('billing_account_id', '=', params.billingAccountId)
       .forUpdate()
       .executeTakeFirst()

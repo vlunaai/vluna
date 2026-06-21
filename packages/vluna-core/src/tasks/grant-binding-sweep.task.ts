@@ -1,5 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common'
-import { sql, type Kysely, type Transaction } from 'kysely'
+import { type Kysely, type Transaction } from 'kysely'
 import { db, setRlsSession } from '../db/index.js'
 import type { Database } from '../types/database.js'
 import {
@@ -13,7 +13,6 @@ import {
 import {
   ensureBillingPlanAssignment,
   ensureBillingPlanGrantsEnrollmentSynced,
-  refreshBillingAccountState,
   issueGrantsForAccount,
 } from '../services/billing-plan.service.js'
 import type { PeriodicTaskDefinition } from '../scheduler/periodic-task.types.js'
@@ -25,6 +24,7 @@ type BillingAccountRow = {
 
 type AssignmentWithProgramRow = {
   assignment_id: string
+  billing_user_id: string
   billing_account_id: string
   program_id: string
   source_kind: string
@@ -98,14 +98,6 @@ const MAX_BINDINGS_PER_ACCOUNT = (() => {
   return Math.floor(parsed)
 })()
 
-const BUNDLE_RECONCILE_LIMIT = (() => {
-  const raw = process.env.VLUNA_GRANT_SWEEP_BUNDLE_RECONCILE_LIMIT
-  if (!raw) return 100
-  const parsed = Number(raw)
-  if (!Number.isFinite(parsed) || parsed <= 0) return 100
-  return Math.min(Math.floor(parsed), 1000)
-})()
-
 @Injectable()
 export class GrantBindingSweepTask implements PeriodicTaskDefinition {
   readonly name = 'grant-binding-sweep'
@@ -143,8 +135,6 @@ export class GrantBindingSweepTask implements PeriodicTaskDefinition {
     const subscriptionCache = new Map<string, SubscriptionInfo>()
 
     await this.runCampaignPhase(dbHandle, realmId, now)
-
-    const reconciledBundles = await this.reconcileGateBundles(dbHandle, realmId, now)
 
     const accounts = (await dbHandle
       .selectFrom('billing_accounts')
@@ -185,54 +175,9 @@ export class GrantBindingSweepTask implements PeriodicTaskDefinition {
 
     if (processedBindings > 0 || issuedGrants > 0) {
       this.logger.log(
-        `Grant sweep realm ${realmId} processed ${processedBindings} bindings; issued ${issuedGrants} grants; reconciled ${reconciledBundles} bundles (${now.toISOString()})`,
+        `Grant sweep realm ${realmId} processed ${processedBindings} bindings; issued ${issuedGrants} grants (${now.toISOString()})`,
       )
-    } else if (reconciledBundles > 0) {
-      this.logger.log(`Grant sweep realm ${realmId} reconciled ${reconciledBundles} gate bundles (${now.toISOString()})`)
     }
-  }
-
-  private async reconcileGateBundles(dbHandle: Kysely<Database>, realmId: string, now: Date): Promise<number> {
-    const staleAccounts = await dbHandle.transaction().execute(async (trx) => {
-      await setRlsSession(trx, { realmId, isRealmAdmin: true })
-      const result = await sql<{ billing_account_id: string }>`
-        select ba.billing_account_id
-        from billing_accounts ba
-        left join lateral (
-          select gpb.bundle_id
-          from billing_plan_assignments bpa
-          inner join billing_plans bpl on bpl.plan_id = bpa.plan_id
-          inner join gate_policy_bundles gpb
-            on gpb.realm_id = ba.realm_id
-           and gpb.bundle_key = coalesce(
-             nullif(bpa.metadata ->> 'gate_bundle_key', ''),
-             nullif(bpl.metadata ->> 'gate_bundle_key', '')
-           )
-           and gpb.status = 'active'
-          where bpa.billing_account_id = ba.billing_account_id
-            and bpa.status = 'active'
-            and bpa.window_start <= ${now}
-            and (bpa.window_end > ${now} or bpa.window_end is null)
-            and bpl.active = true
-            and bpl.kind in ('base', 'addon')
-          order by bpl.priority desc, bpa.assignment_id desc
-          limit 1
-        ) selected on true
-        where ba.realm_id = ${realmId}
-          and ba.current_bundle_id is distinct from selected.bundle_id
-        order by ba.billing_account_id
-        limit ${BUNDLE_RECONCILE_LIMIT}
-      `.execute(trx)
-      return result.rows
-    })
-
-    for (const row of staleAccounts) {
-      await dbHandle.transaction().execute(async (trx) => {
-        await refreshBillingAccountState(trx, String(row.billing_account_id))
-      })
-    }
-
-    return staleAccounts.length
   }
 
   private async runCampaignPhase(dbHandle: Kysely<Database>, realmId: string, now: Date): Promise<void> {
@@ -301,27 +246,31 @@ export class GrantBindingSweepTask implements PeriodicTaskDefinition {
 
         for (const ba of targets) {
           await setRlsSession(trx, { realmId, billingAccountId: ba, isRealmAdmin: true })
-          for (const binding of bindings) {
-            const program = programByCode.get(binding.programCode)
-            if (!program) {
-              this.logger.warn(`Campaign ${campaign.campaign_id} references missing program ${binding.programCode}`)
-              continue
+          const billingUserIds = await this.loadActiveBillingUserIds(trx, ba)
+          for (const billingUserId of billingUserIds) {
+            for (const binding of bindings) {
+              const program = programByCode.get(binding.programCode)
+              if (!program) {
+                this.logger.warn(`Campaign ${campaign.campaign_id} references missing program ${binding.programCode}`)
+                continue
+              }
+              await ensureGrantAssignment(trx, {
+                billingUserId,
+                billingAccountId: ba,
+                programId: String(program.program_id),
+                campaignId: campaign.campaign_id,
+                sourceKind: 'ops.campaign',
+                sourceRef: String(campaign.campaign_id),
+                windowStart: binding.windowStart ?? campaign.window_start,
+                windowEnd: binding.windowEnd ?? campaign.window_end,
+                status: 'active',
+                metadata: {
+                  ...baseMetadata,
+                  grant_campaign_id: campaign.campaign_id,
+                  grant_override: binding.override,
+                },
+              })
             }
-            await ensureGrantAssignment(trx, {
-              billingAccountId: ba,
-              programId: String(program.program_id),
-              campaignId: campaign.campaign_id,
-              sourceKind: 'ops.campaign',
-              sourceRef: String(campaign.campaign_id),
-              windowStart: binding.windowStart ?? campaign.window_start,
-              windowEnd: binding.windowEnd ?? campaign.window_end,
-              status: 'active',
-              metadata: {
-                ...baseMetadata,
-                grant_campaign_id: campaign.campaign_id,
-                grant_override: binding.override,
-              },
-            })
           }
 
           const bpSpec = this.extractBillingPlanSpec(campaign.metadata)
@@ -407,21 +356,25 @@ export class GrantBindingSweepTask implements PeriodicTaskDefinition {
       .executeTakeFirst()
     if (!plan?.plan_id) return
 
-    await ensureBillingPlanAssignment(trx, {
-      billingAccountId: params.billingAccountId,
-      planId: String(plan.plan_id),
-      sourceKind: 'ops.campaign',
-      sourceRef: params.sourceRef,
-      windowStart: params.windowStart,
-      windowEnd: params.windowEnd ?? null,
-      metadata: {
-        campaign_id: params.sourceRef,
-        billing_plan_code: params.planCode,
-      },
-    })
+    const billingUserIds = await this.loadActiveBillingUserIds(trx, params.billingAccountId)
+    for (const billingUserId of billingUserIds) {
+      await ensureBillingPlanAssignment(trx, {
+        billingAccountId: params.billingAccountId,
+        assignmentScope: 'user',
+        billingUserId,
+        planId: String(plan.plan_id),
+        sourceKind: 'ops.campaign',
+        sourceRef: params.sourceRef,
+        windowStart: params.windowStart,
+        windowEnd: params.windowEnd ?? null,
+        metadata: {
+          campaign_id: params.sourceRef,
+          billing_plan_code: params.planCode,
+        },
+      })
+    }
 
     await ensureBillingPlanGrantsEnrollmentSynced(trx, params.billingAccountId)
-    await refreshBillingAccountState(trx, params.billingAccountId)
     await issueGrantsForAccount(trx, params.billingAccountId)
   }
 
@@ -452,6 +405,16 @@ export class GrantBindingSweepTask implements PeriodicTaskDefinition {
     return accounts.map((a) => String(a.billing_account_id))
   }
 
+  private async loadActiveBillingUserIds(trx: Transaction<Database>, billingAccountId: string): Promise<string[]> {
+    const rows = await trx
+      .selectFrom('billing_users')
+      .select(['billing_user_id'])
+      .where('billing_account_id', '=', billingAccountId)
+      .where('status', '=', 'active')
+      .execute()
+    return rows.map((row) => String(row.billing_user_id)).filter(Boolean)
+  }
+
   private async fetchBindingsForAccount(
     dbHandle: Kysely<Database>,
     account: BillingAccountRow,
@@ -461,13 +424,14 @@ export class GrantBindingSweepTask implements PeriodicTaskDefinition {
       await setRlsSession(trx, {
         realmId: account.realm_id,
         billingAccountId: account.billing_account_id,
-        isRealmAdmin: false,
+        isRealmAdmin: true,
       })
 
       let query = trx
         .selectFrom('grant_assignments as ga')
         .select([
           'ga.assignment_id',
+          'ga.billing_user_id',
           'ga.billing_account_id',
           'ga.program_id',
           'ga.source_kind',
@@ -478,6 +442,7 @@ export class GrantBindingSweepTask implements PeriodicTaskDefinition {
           'ga.metadata',
           'ga.updated_at',
         ])
+        .where('ga.billing_account_id', '=', account.billing_account_id)
         .where('ga.status', '=', 'active')
         .where('ga.window_start', '<=', now)
         .where((eb) => eb.or([eb('ga.window_end', 'is', null), eb('ga.window_end', '>', now)]))
@@ -510,6 +475,7 @@ export class GrantBindingSweepTask implements PeriodicTaskDefinition {
           if (!program) return null
           return {
             assignment_id: String(row.assignment_id),
+            billing_user_id: String(row.billing_user_id),
             billing_account_id: String(row.billing_account_id),
             program_id: String(row.program_id),
             source_kind: String(row.source_kind),
@@ -542,12 +508,14 @@ export class GrantBindingSweepTask implements PeriodicTaskDefinition {
     return await dbHandle.transaction().execute(async (trx) => {
       await setRlsSession(trx, {
         realmId: account.realm_id,
+        billingUserId: binding.billing_user_id,
         billingAccountId: account.billing_account_id,
         isRealmAdmin: false,
       })
 
       let effectiveAssignment: GrantAssignmentRow = {
         assignment_id: binding.assignment_id,
+        billing_user_id: binding.billing_user_id,
         billing_account_id: binding.billing_account_id,
         program_id: binding.program_id,
         billing_plan_assignment_id: null,
@@ -583,6 +551,7 @@ export class GrantBindingSweepTask implements PeriodicTaskDefinition {
 
       if (targetWindowEnd && (!effectiveAssignment.window_end || effectiveAssignment.window_end < targetWindowEnd)) {
         effectiveAssignment = await ensureGrantAssignment(trx, {
+          billingUserId: binding.billing_user_id,
           billingAccountId: account.billing_account_id,
           programId: String(effectiveAssignment.program_id),
           sourceKind: effectiveAssignment.source_kind,
@@ -613,6 +582,7 @@ export class GrantBindingSweepTask implements PeriodicTaskDefinition {
 
         const result = await issueGrantForAssignment(trx, {
           realmId: account.realm_id,
+          billingUserId: binding.billing_user_id,
           billingAccountId: account.billing_account_id,
           program,
           assignment: effectiveAssignment,

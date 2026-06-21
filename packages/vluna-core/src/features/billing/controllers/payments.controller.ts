@@ -5,7 +5,7 @@ import { TokenClaimsGuard } from '../../../auth/guards/token-claims.guard.js'
 import { Scopes } from '../../../auth/decorators/scopes.decorator.js'
 import { BILLING_SCOPES } from '../../../auth/constants/scopes.constants.js'
 import { PrincipalGuard } from '../../../auth/guards/principal.guard.js'
-import { PrincipalBillingAccountGuard } from '../../../auth/guards/principal-billing-account.guard.js'
+import { BillingAccountGuard } from '../../../auth/guards/billing-account.guard.js'
 import { okEnvelope, errEnvelope } from '../../../common/envelope.js'
 import type { AppRequest } from '../../../types/app-request.js'
 import type { Database } from '../../../types/database.js'
@@ -185,7 +185,7 @@ abstract class PaymentsControllerBase {
 }
 
 @Controller('payments')
-@UseGuards(RealmGuard, TokenClaimsGuard, RealmMembershipGuard, PrincipalGuard, PrincipalBillingAccountGuard)
+@UseGuards(RealmGuard, TokenClaimsGuard, RealmMembershipGuard, PrincipalGuard, BillingAccountGuard)
 export class PaymentsPublicController extends PaymentsControllerBase {
   @Get()
   @Scopes(BILLING_SCOPES.READ_ALL)
@@ -205,7 +205,7 @@ export class PaymentsPublicController extends PaymentsControllerBase {
 }
 
 @Controller('payments')
-@UseGuards(RealmGuard, AuthRequiredGuard, ServiceAuthGuard, TokenClaimsGuard, RealmMembershipGuard, ServiceAccountGuard, PrincipalGuard, PrincipalBillingAccountGuard)
+@UseGuards(RealmGuard, AuthRequiredGuard, ServiceAuthGuard, TokenClaimsGuard, RealmMembershipGuard, ServiceAccountGuard, PrincipalGuard, BillingAccountGuard)
 export class PaymentsServiceController extends PaymentsControllerBase {
   @Get()
   async listPayments(@Req() req: AppRequest, @Query() q: ListPaymentsQuery): Promise<ListPayments200> {

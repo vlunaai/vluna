@@ -34,6 +34,7 @@ export class ServiceAccountGuard implements CanActivate {
     }
 
     const resolved = await this.resolveBindings({ realmId, principalId, billingAccountId, ctx: req.ctx })
+    this.assertServiceKeyAllowsAccount(req, resolved.billingAccountId)
 
     req.ctx.principal = { id: resolved.principalId }
     req.ctx.billingAccountId = resolved.billingAccountId
@@ -58,6 +59,13 @@ export class ServiceAccountGuard implements CanActivate {
       return principal?.id ? String(principal.id) : undefined
     } catch {
       return undefined
+    }
+  }
+
+  private assertServiceKeyAllowsAccount(req: AppRequest, billingAccountId: string): void {
+    const allowedAccounts = req.ctx?.serviceApiKey?.allowedAccounts ?? []
+    if (allowedAccounts.length > 0 && !allowedAccounts.includes(billingAccountId)) {
+      throw new HttpException({ code: 'AUTH.SERVICE_KEY_ACCOUNT_FORBIDDEN', message: 'Service API key not authorized for billing account' }, 403)
     }
   }
 

@@ -23,7 +23,6 @@ import { BudgetService } from '../../../services/budget.service.js'
 import { LeaseService } from './lease.service.js'
 import { PricingService, PricingItemResult, MeterPriceInfo, PricingComputation } from './pricing.service.js'
 import { QuotaService } from './quota.service.js'
-import { SeatService } from './seat.service.js'
 import { SettlementService } from './settlement.service.js'
 import { GrantBalanceService } from '../../../services/grant-balance.service.js'
 import { MeterService } from '../../billing/services/meter.service.js'
@@ -90,8 +89,6 @@ const LATE_COMMIT_GRACE_MS = (() => {
 
 const LOW_HEADROOM_BASE_THRESHOLD_XUSD = 1_000
 const LOW_HEADROOM_MULTIPLIER = 2
-const MAX_SEAT_ID_LENGTH = 256
-
 type AuthorizeResult = {
   leaseId: string
   leaseToken: string
@@ -146,7 +143,6 @@ export class GateService {
     @Inject(LeaseService) private readonly leaseService: LeaseService,
     @Inject(PricingService) private readonly pricingService: PricingService,
     @Inject(QuotaService) private readonly quotaService: QuotaService,
-    @Inject(SeatService) private readonly seatService: SeatService,
     @Inject(BudgetService) private readonly budgetService: BudgetService,
     @Inject(SettlementService) private readonly settlementService: SettlementService,
     @Inject(GrantBalanceService) private readonly grantBalanceService: GrantBalanceService,
@@ -163,11 +159,12 @@ export class GateService {
   ): Promise<{ data: AuthorizeResponse; hints?: GateHint[] }> {
     const db = req.ctx?.db
     const realmId = req.ctx?.realmId
+    const billingUserId = req.ctx?.billingUserId
     const billingAccountId = req.ctx?.billingAccountId
     const idempotencyKey = req.ctx?.idempotencyKey
-    const subject = (req.ctx?.principal?.id || req.ctx?.claims?.sub || '').trim()
+    const subject = (req.ctx?.businessUserId || billingUserId || '').trim()
 
-    if (!db || !realmId || !billingAccountId) {
+    if (!db || !realmId || !billingUserId || !billingAccountId) {
       throw new HttpException({ code: 'AUTH.UNAUTHORIZED', message: 'missing context' }, 401)
     }
     if (!idempotencyKey) {
@@ -186,8 +183,6 @@ export class GateService {
     }
 
     const estimatedQuantity = parseOptionalNonNegativeInt(body.estimated_quantity_minor, 'estimated_quantity_minor')
-    const seatId = this.normalizeSeatId(body?.seat_id, { required: false, field: 'seat_id' })
-
     const labels = this.normalizeLabels(body.labels)
     const requestHash = this.buildAuthorizeRequestHash({
       subject,
@@ -195,20 +190,11 @@ export class GateService {
       featureFamilyCode: body.feature_family_code ?? undefined,
       estimatedQuantity,
       budgetId: body.budget_id,
-      seatId,
       labels,
     })
 
     const result = await runInTransaction<AuthorizeResult>(db, async (trx) => {
-      await setRlsSession(trx, { realmId, billingAccountId })
-
-      await this.seatService.enforceSeatLimit(trx, {
-        realmId,
-        billingAccountId,
-        featureCode,
-        seatId,
-        bundleId: req.ctx?.billingAccount?.currentBundleId ?? null,
-      })
+      await setRlsSession(trx, { realmId, billingAccountId, billingUserId })
 
       const { feature, meters: featureMeters } = await this.quotaService.loadFeatureWithMeters(trx, {
         realmId,
@@ -228,6 +214,7 @@ export class GateService {
       await this.quotaService.ensureEntitlement(trx, {
         realmId,
         billingAccountId,
+        billingUserId,
         featureCode,
         now,
         feature,
@@ -245,6 +232,7 @@ export class GateService {
       const shouldEmitFundingHints = billingModeResolved.billingMode === 'prepaid'
 
       const grantBalances = await this.grantBalanceService.getAccountGrantBalances(trx, {
+        billingUserId,
         billingAccountId,
         asOf: now,
       })
@@ -257,27 +245,27 @@ export class GateService {
               realmId,
               meterCodes,
               featureCode,
-	              billingAccountId,
-	              at: now,
-	              onWarning: (warning) => {
-	                pricingWarnings.push(
-	                  warning.kind === 'meter_price_missing'
-	                    ? contractPricingMeterPriceMissingHint({
-	                        meterCode: warning.meterCode,
-	                        contractId: warning.contractId,
-	                        termKey: warning.termKey,
-	                        message: warning.message,
-	                      })
-	                    : contractPricingInvalidTermHint({
-	                        meterCode: warning.meterCode,
-	                        contractId: warning.contractId,
-	                        termKey: warning.termKey,
-	                        message: warning.message,
-	                      }),
-	                )
-	              },
-	            })
-	          : new Map<string, MeterPriceInfo>()
+              billingAccountId,
+              at: now,
+              onWarning: (warning) => {
+                pricingWarnings.push(
+                  warning.kind === 'meter_price_missing'
+                    ? contractPricingMeterPriceMissingHint({
+                        meterCode: warning.meterCode,
+                        contractId: warning.contractId,
+                        termKey: warning.termKey,
+                        message: warning.message,
+                      })
+                    : contractPricingInvalidTermHint({
+                        meterCode: warning.meterCode,
+                        contractId: warning.contractId,
+                        termKey: warning.termKey,
+                        message: warning.message,
+                      }),
+                )
+              },
+            })
+          : new Map<string, MeterPriceInfo>()
 
         const isZeroCostFeature =
           featureMeters.length === 0
@@ -301,7 +289,7 @@ export class GateService {
 
       const existingLease = await this.leaseService.findIdempotentLease(trx, {
         idempotencyKey,
-        billingAccountId,
+        billingUserId,
       })
 
       if (existingLease) {
@@ -334,9 +322,7 @@ export class GateService {
         }
       }
 
-      const policyWindows = await this.quotaService.loadActivePolicyWindows(trx, realmId, billingAccountId, now, {
-        bundleId: req.ctx?.billingAccount?.currentBundleId ?? null,
-      })
+      const policyWindows = await this.quotaService.loadActivePolicyWindows(trx, realmId, billingAccountId, billingUserId, now)
       const featureWindows = policyWindows.filter((window) => window.featureCode === featureCode)
       if (featureWindows.length === 0) {
         throw new HttpException({ code: 'RESOURCE.NOT_FOUND', message: 'no active policy for feature' }, 422)
@@ -347,7 +333,7 @@ export class GateService {
         throw new HttpException({ code: 'SERVER.CONFIG', message: 'no quota policy window configured for feature' }, 500)
       }
 
-      const counters = await this.quotaService.loadCounterLookup(trx, realmId, billingAccountId, quotaWindows)
+      const counters = await this.quotaService.loadCounterLookup(trx, realmId, billingAccountId, billingUserId, quotaWindows)
       const quotaSummaries = quotaWindows.map((window) => {
         if (!window.counterKey) {
           throw new HttpException({ code: 'SERVER.CONFIG', message: 'quota window missing counter key' }, 500)
@@ -388,6 +374,7 @@ export class GateService {
       const rateWindows = featureWindows.filter((window) => window.windowKind === 'rate')
       if (rateWindows.length > 0) {
         const { hints: rateHints } = await this.quotaService.enforceRateWindows(trx, {
+          billingUserId,
           billingAccountId,
           windows: rateWindows,
           increment: 1,
@@ -401,6 +388,7 @@ export class GateService {
       if (requestedBudgetId) {
         const budgetSnapshot = await this.budgetService.previewBudgetLimit(trx, {
           realmId,
+          billingUserId,
           billingAccountId,
           budgetId: requestedBudgetId,
           now,
@@ -437,26 +425,26 @@ export class GateService {
           realmId,
           meterCodes,
           featureCode,
-	          billingAccountId,
-	          at: now,
-	          onWarning: (warning) => {
-	            hints.push(
-	              warning.kind === 'meter_price_missing'
-	                ? contractPricingMeterPriceMissingHint({
-	                    meterCode: warning.meterCode,
-	                    contractId: warning.contractId,
-	                    termKey: warning.termKey,
-	                    message: warning.message,
-	                  })
-	                : contractPricingInvalidTermHint({
-	                    meterCode: warning.meterCode,
-	                    contractId: warning.contractId,
-	                    termKey: warning.termKey,
-	                    message: warning.message,
-	                  }),
-	            )
-	          },
-	        })
+          billingAccountId,
+          at: now,
+          onWarning: (warning) => {
+            hints.push(
+              warning.kind === 'meter_price_missing'
+                ? contractPricingMeterPriceMissingHint({
+                    meterCode: warning.meterCode,
+                    contractId: warning.contractId,
+                    termKey: warning.termKey,
+                    message: warning.message,
+                  })
+                : contractPricingInvalidTermHint({
+                    meterCode: warning.meterCode,
+                    contractId: warning.contractId,
+                    termKey: warning.termKey,
+                    message: warning.message,
+                  }),
+            )
+          },
+        })
 
         const coverageInputs = featureMeters
           .map((meter) => {
@@ -480,6 +468,7 @@ export class GateService {
         if (coverageInputs.length > 0) {
           const coverageMap = await this.buildMeterCoverages(trx, {
             realmId,
+            billingUserId,
             billingAccountId,
             asOf: now,
             profile: 'conservative',
@@ -593,11 +582,8 @@ export class GateService {
         window_start: quotaWindows[0]?.windowStart.toISOString() ?? nowIso(),
         window_end: quotaWindows[0]?.windowEnd.toISOString() ?? nowIso(),
       }
-      if (seatId) {
-        metadata.seat_id = seatId
-      }
-
       const { leaseId, leaseToken } = await this.leaseService.createLease(trx, {
+        billingUserId,
         billingAccountId,
         policyId: quotaWindows[0].policyId,
         featureCode,
@@ -672,7 +658,7 @@ export class GateService {
 
   async ingestInternal(
     db: Kysely<Database> | Transaction<Database>,
-    ctx: { realmId: string; billingAccountId: string },
+    ctx: { realmId: string; billingUserId: string; billingAccountId: string },
     body: IngestRequest,
     idempotencyKey: string,
     expectedMeterSemanticKind: MeterSemanticKind,
@@ -681,6 +667,7 @@ export class GateService {
       ctx: {
         db,
         realmId: ctx.realmId,
+        billingUserId: ctx.billingUserId,
         billingAccountId: ctx.billingAccountId,
       },
     } as AppRequest
@@ -690,12 +677,14 @@ export class GateService {
   async batchCommit(req: AppRequest, body: BatchCommitRequest): Promise<BatchCommitResponse> {
     const db = req.ctx?.db
     const realmId = req.ctx?.realmId
+    const billingUserId = req.ctx?.billingUserId
     const billingAccountId = req.ctx?.billingAccountId
-    if (!db || !realmId || !billingAccountId) {
+    if (!db || !realmId || !billingUserId || !billingAccountId) {
       throw new HttpException({ code: 'AUTH.UNAUTHORIZED', message: 'missing context' }, 401)
     }
     const ensuredDb = db as NonNullable<typeof db>
     const ensuredRealmId = realmId as NonNullable<typeof realmId>
+    const ensuredBillingUserId = billingUserId as NonNullable<typeof billingUserId>
     const ensuredBillingAccountId = billingAccountId as NonNullable<typeof billingAccountId>
 
     const items = Array.isArray(body?.items) ? body.items : []
@@ -747,7 +736,7 @@ export class GateService {
     if (closeContexts.length > 0) {
       for (const ctx of closeContexts) {
         await runInTransaction(ensuredDb, async (trx) => {
-          await setRlsSession(trx, { realmId: ensuredRealmId, billingAccountId: ensuredBillingAccountId })
+          await setRlsSession(trx, { realmId: ensuredRealmId, billingAccountId: ensuredBillingAccountId, billingUserId: ensuredBillingUserId })
           await this.closeLeaseAfterCommit(trx, ctx.leaseRow, {
             reservationRemainingXusd: ctx.reservationRemainingXusd,
             lastCommitId: ctx.lastLineId,
@@ -767,8 +756,9 @@ export class GateService {
   async cancel(req: AppRequest, body: CancelRequest): Promise<CancelResponse> {
     const db = req.ctx?.db
     const realmId = req.ctx?.realmId
+    const billingUserId = req.ctx?.billingUserId
     const billingAccountId = req.ctx?.billingAccountId
-    if (!db || !realmId || !billingAccountId) {
+    if (!db || !realmId || !billingUserId || !billingAccountId) {
       throw new HttpException({ code: 'AUTH.UNAUTHORIZED', message: 'missing context' }, 401)
     }
 
@@ -785,9 +775,10 @@ export class GateService {
     const traceId = `cancel_${Date.now().toString(36)}`
 
     const result = await runInTransaction(db, async (trx) => {
-      await setRlsSession(trx, { realmId, billingAccountId })
+      await setRlsSession(trx, { realmId, billingAccountId, billingUserId })
       const { releasedCap, stateChanged } = await this.leaseService.cancelLease(trx, {
         leaseId,
+        billingUserId,
         billingAccountId,
         traceId,
       })
@@ -803,11 +794,12 @@ export class GateService {
 
   async listFeatureLimits(req: AppRequest): Promise<FeatureLimitResponse[]> {
     const db = req.ctx?.db
+    const billingUserId = req.ctx?.billingUserId
     const billingAccountId = req.ctx?.billingAccountId
     const realmId = req.ctx?.realmId
-    if (!db || !billingAccountId || !realmId) return []
+    if (!db || !billingUserId || !billingAccountId || !realmId) return []
 
-    await setRlsSession(db, { realmId, billingAccountId })
+    await setRlsSession(db, { realmId, billingAccountId, billingUserId })
 
     const query = (req.query ?? {}) as Record<string, unknown>
     const featureFilter = parseStringArray(query.feature_code)
@@ -820,6 +812,7 @@ export class GateService {
     const entitlements = await this.quotaService.loadEntitledFeatures(db, {
       realmId,
       billingAccountId,
+      billingUserId,
       at: asOf,
       featureCodes: featureFilter.length > 0 ? featureFilter : undefined,
       featureFamilyCodes: feature_familyFilter.length > 0 ? feature_familyFilter : undefined,
@@ -831,15 +824,13 @@ export class GateService {
       featureIdByCode: entitlements.entitledFeatureIdByCode,
     })
 
-    const policyWindows = await this.quotaService.loadActivePolicyWindows(db, realmId, billingAccountId, asOf, {
-      bundleId: req.ctx?.billingAccount?.currentBundleId ?? null,
-    })
+    const policyWindows = await this.quotaService.loadActivePolicyWindows(db, realmId, billingAccountId, billingUserId, asOf)
     const featureSet = new Set(featureCodes)
     const filteredWindows = policyWindows.filter((window) => featureSet.has(window.featureCode))
 
     const counters =
       includeQuotas || includeRates
-        ? await this.quotaService.loadCounterLookup(db, realmId, billingAccountId, filteredWindows)
+        ? await this.quotaService.loadCounterLookup(db, realmId, billingAccountId, billingUserId, filteredWindows)
         : new Map<string, number>()
     const grouped = new Map<string, PolicyWindowView[]>()
     for (const window of filteredWindows) {
@@ -886,11 +877,12 @@ export class GateService {
 
   async listMeters(req: AppRequest): Promise<MeterLimit[]> {
     const db = req.ctx?.db
+    const billingUserId = req.ctx?.billingUserId
     const billingAccountId = req.ctx?.billingAccountId
     const realmId = req.ctx?.realmId
-    if (!db || !billingAccountId || !realmId) return []
+    if (!db || !billingUserId || !billingAccountId || !realmId) return []
 
-    await setRlsSession(db, { realmId, billingAccountId })
+    await setRlsSession(db, { realmId, billingAccountId, billingUserId })
 
     const query = (req.query ?? {}) as Record<string, unknown>
 
@@ -926,6 +918,7 @@ export class GateService {
     const entitlements = await this.quotaService.loadEntitledFeatures(db, {
       realmId,
       billingAccountId,
+      billingUserId,
       at: coverageAsOf,
       featureCodes: featureFilter.length > 0 ? featureFilter : undefined,
       featureFamilyCodes: feature_familyFilter.length > 0 ? feature_familyFilter : undefined,
@@ -944,15 +937,13 @@ export class GateService {
       .sort((a, b) => a.localeCompare(b))
     if (entitledFeatureCodes.length === 0) return []
 
-    const policyWindows = await this.quotaService.loadActivePolicyWindows(db, realmId, billingAccountId, coverageAsOf, {
-      bundleId: req.ctx?.billingAccount?.currentBundleId ?? null,
-    })
+    const policyWindows = await this.quotaService.loadActivePolicyWindows(db, realmId, billingAccountId, billingUserId, coverageAsOf)
     const entitledFeatureSet = new Set(entitledFeatureCodes)
     const filteredWindows = policyWindows.filter((window) => entitledFeatureSet.has(window.featureCode))
 
     const includeLimitsAny = includeLimitsQuotas || includeLimitsRates
     const counterLookup: Map<string, number> = includeLimitsAny
-      ? await this.quotaService.loadCounterLookup(db, realmId, billingAccountId, filteredWindows)
+      ? await this.quotaService.loadCounterLookup(db, realmId, billingAccountId, billingUserId, filteredWindows)
       : new Map<string, number>()
 
     const groupedByFeature = new Map<string, PolicyWindowView[]>()
@@ -1075,6 +1066,7 @@ export class GateService {
       if (coverageInputs.length > 0) {
         coverageMap = await this.buildMeterCoverages(db, {
           realmId,
+          billingUserId,
           billingAccountId,
           budgetId: coverageBasis === 'budget' ? coverageBudgetId : undefined,
           profile: coverageProfile,
@@ -1135,12 +1127,14 @@ export class GateService {
   ): Promise<{ response: CommitResponse; hints: GateHint[]; closeContext?: CommitExecutionResult['closeContext'] }> {
     const db = req.ctx?.db
     const realmId = req.ctx?.realmId
+    const billingUserId = req.ctx?.billingUserId
     const billingAccountId = req.ctx?.billingAccountId
-    if (!db || !realmId || !billingAccountId) {
+    if (!db || !realmId || !billingUserId || !billingAccountId) {
       throw new HttpException({ code: 'AUTH.UNAUTHORIZED', message: 'missing context' }, 401)
     }
     const ensuredDb = db as NonNullable<typeof db>
     const ensuredRealmId = realmId as NonNullable<typeof realmId>
+    const ensuredBillingUserId = billingUserId as NonNullable<typeof billingUserId>
     const ensuredBillingAccountId = billingAccountId as NonNullable<typeof billingAccountId>
 
     const leaseToken = (body?.lease_token || '').trim()
@@ -1159,19 +1153,17 @@ export class GateService {
 
     const leaseId = parseLeaseToken(leaseToken)
     const labels = this.normalizeLabels(body.labels)
-    const seatId = this.normalizeSeatId(body?.seat_id, { required: false, field: 'seat_id' })
     const normalizedItems = this.normalizeCommitItems(body)
     const requestHash = this.buildCommitRequestHash({
       leaseToken,
       featureCode: featureCodeInput,
       quantityMinor: normalizedQuantity,
-      seatId,
       labels,
       items: normalizedItems,
     })
 
     const execution = await runInTransaction<CommitExecutionResult>(ensuredDb, async (trx) => {
-      await setRlsSession(trx, { realmId: ensuredRealmId, billingAccountId: ensuredBillingAccountId })
+      await setRlsSession(trx, { realmId: ensuredRealmId, billingAccountId: ensuredBillingAccountId, billingUserId: ensuredBillingUserId })
 
       const { feature, meters: featureMetersInitial } = await this.quotaService.loadFeatureWithMeters(trx, {
         realmId: ensuredRealmId,
@@ -1187,6 +1179,7 @@ export class GateService {
       const entitlementDecision = await this.quotaService.ensureEntitlement(trx, {
         realmId: ensuredRealmId,
         billingAccountId: ensuredBillingAccountId,
+        billingUserId: ensuredBillingUserId,
         featureCode: featureCodeInput,
         now,
         feature,
@@ -1195,6 +1188,7 @@ export class GateService {
 
       const { envelope } = await this.idempotencyService.acquire(trx, {
         realmId: ensuredRealmId,
+        billingUserId: ensuredBillingUserId,
         billingAccountId: ensuredBillingAccountId,
         operation: 'commit',
         scopeType: 'lease',
@@ -1203,13 +1197,11 @@ export class GateService {
         requestHash,
         metadata: {
           feature_code: featureCodeInput,
-          seat_id: seatId ?? null,
         },
         requestSnapshot: {
           feature_code: featureCodeInput,
           lease_token: leaseToken,
           quantity_minor: normalizedQuantity,
-          seat_id: seatId ?? null,
           labels,
           items: normalizedItems,
         },
@@ -1244,10 +1236,10 @@ export class GateService {
 
       const leaseRow = await this.loadAndValidateLease(trx, {
         leaseId,
-        billingAccountId,
+        billingUserId: ensuredBillingUserId,
+        billingAccountId: ensuredBillingAccountId,
         featureCode: featureCodeInput,
         leaseToken,
-        seatId: seatId ?? undefined,
       })
 
       const runtimeHints: GateHint[] = []
@@ -1276,11 +1268,11 @@ export class GateService {
         }
       }
 
-      const policyWindows = await this.quotaService.loadActivePolicyWindows(trx, realmId, billingAccountId, now, {
-        bundleId: req.ctx?.billingAccount?.currentBundleId ?? null,
+      const matchedQuotaWindows = this.resolveQuotaWindowsFromLease(leaseRow, {
+        billingAccountId: ensuredBillingAccountId,
+        billingUserId: ensuredBillingUserId,
       })
-      const matchedQuotaWindows = this.resolveQuotaWindowsFromLease(leaseRow, policyWindows)
-      const counters = await this.quotaService.loadCounterLookup(trx, realmId, billingAccountId, matchedQuotaWindows)
+      const counters = await this.quotaService.loadCounterLookup(trx, ensuredRealmId, ensuredBillingAccountId, ensuredBillingUserId, matchedQuotaWindows)
       const exhaustedWindows = matchedQuotaWindows.filter((window) => {
         if (window.limitMinor === UNLIMITED_QUOTA_MINOR) return false
         const remaining = Math.max(0, window.limitMinor - this.quotaService.getWindowUsage(window, counters))
@@ -1377,26 +1369,26 @@ export class GateService {
         realmId,
         featureCode: featureCodeInput,
         meterCodes: uniqueMeterCodes,
-	        billingAccountId: ensuredBillingAccountId,
-	        at: now,
-	        onWarning: (warning) => {
-	          runtimeHints.push(
-	            warning.kind === 'meter_price_missing'
-	              ? contractPricingMeterPriceMissingHint({
-	                  meterCode: warning.meterCode,
-	                  contractId: warning.contractId,
-	                  termKey: warning.termKey,
-	                  message: warning.message,
-	                })
-	              : contractPricingInvalidTermHint({
-	                  meterCode: warning.meterCode,
-	                  contractId: warning.contractId,
-	                  termKey: warning.termKey,
-	                  message: warning.message,
-	                }),
-	          )
-	        },
-	      })
+        billingAccountId: ensuredBillingAccountId,
+        at: now,
+        onWarning: (warning) => {
+          runtimeHints.push(
+            warning.kind === 'meter_price_missing'
+              ? contractPricingMeterPriceMissingHint({
+                  meterCode: warning.meterCode,
+                  contractId: warning.contractId,
+                  termKey: warning.termKey,
+                  message: warning.message,
+                })
+              : contractPricingInvalidTermHint({
+                  meterCode: warning.meterCode,
+                  contractId: warning.contractId,
+                  termKey: warning.termKey,
+                  message: warning.message,
+                }),
+          )
+        },
+      })
 
       const pricingEntries: Array<{
         item: NormalizedCommitItem
@@ -1452,7 +1444,8 @@ export class GateService {
           residualMode: identityResidualMode,
         })
         const previousXusdRemainder = await this.pricingService.loadResidualBucketRemainder(trx, {
-          billingAccountId,
+          billingUserId: ensuredBillingUserId,
+          billingAccountId: ensuredBillingAccountId,
           meterCode: item.meter_code,
           pricingIdentity: revenueIdentity,
           expectedDenom: priceInfo.unitQuantityMinor,
@@ -1469,7 +1462,8 @@ export class GateService {
           residualMode: identityResidualMode,
         })
         const previousCostRemainder = await this.pricingService.loadResidualBucketRemainder(trx, {
-          billingAccountId,
+          billingUserId: ensuredBillingUserId,
+          billingAccountId: ensuredBillingAccountId,
           meterCode: item.meter_code,
           pricingIdentity: costIdentity,
           expectedDenom: priceInfo.costUnitQuantityMinor,
@@ -1549,8 +1543,9 @@ export class GateService {
             normalizedQuantity > 0 ? Math.floor((allocation.allocated * appliedQuantityNumber) / normalizedQuantity) : 0
           if (scaledQuantity <= 0) continue
           await this.quotaService.applyCounterDelta(trx, {
-            realmId,
-            billingAccountId,
+            realmId: ensuredRealmId,
+            billingUserId: ensuredBillingUserId,
+            billingAccountId: ensuredBillingAccountId,
             window: allocation.window,
             quantityMinor: scaledQuantity,
           })
@@ -1564,7 +1559,8 @@ export class GateService {
       if (leaseRow.budget_id !== null && settlementAmountXusd > 0n) {
         budgetUsage = await this.budgetService.updateBudgetUsage(trx, {
           realmId,
-          billingAccountId,
+          billingUserId: ensuredBillingUserId,
+          billingAccountId: ensuredBillingAccountId,
           budgetId: String(leaseRow.budget_id),
           consumeAmountXusd: settlementAmountXusd,
           now,
@@ -1578,8 +1574,9 @@ export class GateService {
       }
 
       const fundingPlan = await this.settlementService.planFundingAllocations(trx, {
-        realmId,
-        billingAccountId,
+        realmId: ensuredRealmId,
+        billingUserId: ensuredBillingUserId,
+        billingAccountId: ensuredBillingAccountId,
         amountXusd: settlementAmountXusd,
         now,
       })
@@ -1658,7 +1655,8 @@ export class GateService {
         .insertInto('billing_ratings')
         .values({
           realm_id: realmId,
-          billing_account_id: billingAccountId,
+          billing_user_id: ensuredBillingUserId,
+          billing_account_id: ensuredBillingAccountId,
           idempotency_id: envelope.idempotency_id,
           source_ref: `gate_lease:${leaseRow.lease_id}`,
           budget_id: leaseRow.budget_id ?? undefined,
@@ -1732,12 +1730,13 @@ export class GateService {
         summary.line_id = lineId
       }
 
-      await this.updateResidualBuckets(trx, billingAccountId, pricedResults, now)
+      await this.updateResidualBuckets(trx, ensuredBillingUserId, ensuredBillingAccountId, pricedResults, now)
       await this.settlementService.ensurePendingSettlement(trx, {
-        realmId,
+        realmId: ensuredRealmId,
         featureCode: featureCodeInput,
         commitId,
-        billingAccountId,
+        billingUserId: ensuredBillingUserId,
+        billingAccountId: ensuredBillingAccountId,
         canonicalAmountXusd: aggregate.amountXusd,
         canonicalCostXusd: totalCostXusd,
         appliedAmountXusd,
@@ -1769,7 +1768,7 @@ export class GateService {
           commits: [
             {
               commitId,
-              billingAccountId,
+              billingAccountId: ensuredBillingAccountId,
               pricingFingerprint: aggregate.pricingFingerprint,
               amountXusd: settlementAmountXusd,
               committedAt,
@@ -1867,12 +1866,14 @@ export class GateService {
   ): Promise<{ response: CommitResponse; hints: GateHint[] }> {
     const db = req.ctx?.db
     const realmId = req.ctx?.realmId
+    const billingUserId = req.ctx?.billingUserId
     const billingAccountId = req.ctx?.billingAccountId
-    if (!db || !realmId || !billingAccountId) {
+    if (!db || !realmId || !billingUserId || !billingAccountId) {
       throw new HttpException({ code: 'AUTH.UNAUTHORIZED', message: 'missing context' }, 401)
     }
     const ensuredDb = db as NonNullable<typeof db>
     const ensuredRealmId = realmId as NonNullable<typeof realmId>
+    const ensuredBillingUserId = billingUserId as NonNullable<typeof billingUserId>
     const ensuredBillingAccountId = billingAccountId as NonNullable<typeof billingAccountId>
 
     let featureCodeInput: string
@@ -1914,7 +1915,7 @@ export class GateService {
     })
 
     const execution = await runInTransaction<{ response: CommitResponse; hints: GateHint[] }>(ensuredDb, async (trx) => {
-      await setRlsSession(trx, { realmId: ensuredRealmId, billingAccountId: ensuredBillingAccountId })
+      await setRlsSession(trx, { realmId: ensuredRealmId, billingAccountId: ensuredBillingAccountId, billingUserId: ensuredBillingUserId })
 
       const { feature, meters: featureMetersInitial } = await this.quotaService.loadFeatureWithMeters(trx, {
         realmId: ensuredRealmId,
@@ -1931,6 +1932,7 @@ export class GateService {
       const entitlementDecision = await this.quotaService.ensureEntitlement(trx, {
         realmId: ensuredRealmId,
         billingAccountId: ensuredBillingAccountId,
+        billingUserId: ensuredBillingUserId,
         featureCode: featureCodeInput,
         now: effectiveAt,
         feature,
@@ -1939,9 +1941,10 @@ export class GateService {
 
       const { envelope } = await this.idempotencyService.acquire(trx, {
         realmId: ensuredRealmId,
+        billingUserId: ensuredBillingUserId,
         billingAccountId: ensuredBillingAccountId,
         operation: 'ingest',
-        scopeType: 'account',
+        scopeType: 'user',
         key: idempotencyKey,
         requestHash,
         metadata: {
@@ -2144,6 +2147,7 @@ export class GateService {
           residualMode: identityResidualMode,
         })
         const previousXusdRemainder = await this.pricingService.loadResidualBucketRemainder(trx, {
+          billingUserId: ensuredBillingUserId,
           billingAccountId: ensuredBillingAccountId,
           meterCode: item.meter_code,
           pricingIdentity: revenueIdentity,
@@ -2161,6 +2165,7 @@ export class GateService {
           residualMode: identityResidualMode,
         })
         const previousCostRemainder = await this.pricingService.loadResidualBucketRemainder(trx, {
+          billingUserId: ensuredBillingUserId,
           billingAccountId: ensuredBillingAccountId,
           meterCode: item.meter_code,
           pricingIdentity: costIdentity,
@@ -2219,6 +2224,7 @@ export class GateService {
 
       const fundingPlan = await this.settlementService.planFundingAllocations(trx, {
         realmId: ensuredRealmId,
+        billingUserId: ensuredBillingUserId,
         billingAccountId: ensuredBillingAccountId,
         amountXusd: settlementAmountXusd,
         now: effectiveAt,
@@ -2282,6 +2288,7 @@ export class GateService {
         .insertInto('billing_ratings')
         .values({
           realm_id: ensuredRealmId,
+          billing_user_id: ensuredBillingUserId,
           billing_account_id: ensuredBillingAccountId,
           rating_kind: 'ingest',
           idempotency_id: envelope.idempotency_id,
@@ -2358,11 +2365,12 @@ export class GateService {
         summary.line_id = lineId
       }
 
-      await this.updateResidualBuckets(trx, ensuredBillingAccountId, pricedResults, systemNow)
+      await this.updateResidualBuckets(trx, ensuredBillingUserId, ensuredBillingAccountId, pricedResults, systemNow)
       await this.settlementService.ensurePendingSettlement(trx, {
         realmId: ensuredRealmId,
         featureCode: featureCodeInput,
         commitId,
+        billingUserId: ensuredBillingUserId,
         billingAccountId: ensuredBillingAccountId,
         canonicalAmountXusd: aggregate.amountXusd,
         canonicalCostXusd: totalCostXusd,
@@ -2462,12 +2470,13 @@ export class GateService {
     return execution
   }
 
-  private async loadAndValidateLease(
-    trx: Kysely<Database> | Transaction<Database>,
-    params: { leaseId: string; billingAccountId: string; featureCode: string; leaseToken: string; seatId?: string },
-  ): Promise<LeaseRow> {
+	  private async loadAndValidateLease(
+	    trx: Kysely<Database> | Transaction<Database>,
+	    params: { leaseId: string; billingUserId: string; billingAccountId: string; featureCode: string; leaseToken: string },
+	  ): Promise<LeaseRow> {
     const leaseRow = await this.leaseService.findAndLockLeaseForCommit(trx, {
       leaseId: params.leaseId,
+      billingUserId: params.billingUserId,
       billingAccountId: params.billingAccountId,
     })
 
@@ -2481,19 +2490,15 @@ export class GateService {
       throw new HttpException({ code: 'WRITE.INVALID_PAYLOAD', message: 'invalid lease token' }, 422)
     }
 
-    if (params.seatId) {
-      const storedSeatId = typeof metadata.seat_id === 'string' ? metadata.seat_id.trim() : ''
-      if (!storedSeatId || storedSeatId !== params.seatId) {
-        throw new HttpException({ code: 'WRITE.INVALID_PAYLOAD', message: 'seat mismatch for lease' }, 409)
-      }
-    }
-
     return leaseRow
   }
 
   private resolveQuotaWindowsFromLease(
     leaseRow: LeaseRow,
-    policyWindows: PolicyWindowView[],
+    params: {
+      billingAccountId: string
+      billingUserId: string
+    },
   ): PolicyWindowView[] {
     const metadata = (leaseRow.metadata ?? {}) as Record<string, unknown>
     const entries = this.quotaService.extractQuotaWindowMetadata(metadata)
@@ -2503,29 +2508,44 @@ export class GateService {
 
     const matched: PolicyWindowView[] = []
     for (const entry of entries) {
-      const window = this.quotaService.matchQuotaWindow(entry, policyWindows)
-      if (!window || window.featureCode !== leaseRow.feature_code) {
-        throw new HttpException({ code: 'RESOURCE.NOT_FOUND', message: 'policy window not found' }, 422)
+      const expectedSubjectId = entry.subject_scope === 'account' ? params.billingAccountId : params.billingUserId
+      if (entry.subject_id !== expectedSubjectId) {
+        throw new HttpException({ code: 'WRITE.INVALID_PAYLOAD', message: 'lease quota window subject mismatch' }, 422)
       }
-      if (!window.counterKey) {
-        throw new HttpException({ code: 'SERVER.CONFIG', message: 'quota window missing counter key' }, 500)
+      const windowStart = new Date(entry.window_start)
+      const windowEnd = new Date(entry.window_end)
+      if (Number.isNaN(windowStart.valueOf()) || Number.isNaN(windowEnd.valueOf()) || windowEnd <= windowStart) {
+        throw new HttpException({ code: 'WRITE.INVALID_PAYLOAD', message: 'invalid lease quota window bounds' }, 422)
       }
-      if (window.windowKind !== 'quota') {
-        throw new HttpException({ code: 'SERVER.CONFIG', message: 'unexpected non-quota window in lease metadata' }, 500)
-      }
-      matched.push(window)
+      matched.push({
+        policyId: entry.policy_id,
+        policyName: `policy-${entry.policy_id}`,
+        subjectScope: entry.subject_scope,
+        subjectId: entry.subject_id,
+        featureCode: leaseRow.feature_code,
+        unit: entry.unit,
+        limitMinor: entry.limit_minor,
+        windowStart,
+        windowEnd,
+        windowMs: windowEnd.getTime() - windowStart.getTime(),
+        windowKind: 'quota',
+        counterKey: entry.counter_key,
+        policyStatus: 'assignable',
+      })
     }
     return matched
   }
 
   private async updateResidualBuckets(
     trx: Kysely<Database> | Transaction<Database>,
+    billingUserId: string,
     billingAccountId: string,
     pricingResults: PricingItemResult[],
     now: Date,
   ): Promise<void> {
     for (const entry of pricingResults) {
       await this.pricingService.upsertResidualBucket(trx, {
+        billingUserId,
         billingAccountId,
         meterCode: entry.item.meter_code,
         pricingIdentity: entry.computation.pricingIdentity,
@@ -2535,6 +2555,7 @@ export class GateService {
         now,
       })
       await this.pricingService.upsertResidualBucket(trx, {
+        billingUserId,
         billingAccountId,
         meterCode: entry.item.meter_code,
         pricingIdentity: entry.computation.costPricingIdentity,
@@ -2644,42 +2665,6 @@ export class GateService {
     return parsed
   }
 
-  private normalizeSeatId(
-    input: unknown,
-    opts?: { required?: boolean; field?: string },
-  ): string | undefined {
-    const required = opts?.required === true
-    const field = opts?.field ?? 'seat_id'
-    if (input === undefined || input === null) {
-      if (required) {
-        throw new HttpException({ code: 'VALIDATION.INVALID_INPUT', message: `${field} is required` }, 422)
-      }
-      return undefined
-    }
-    let raw: string
-    if (typeof input === 'number') {
-      if (!Number.isFinite(input)) {
-        throw new HttpException({ code: 'VALIDATION.INVALID_INPUT', message: `${field} must be a valid number` }, 422)
-      }
-      raw = String(input)
-    } else if (typeof input === 'string') {
-      raw = input
-    } else {
-      throw new HttpException({ code: 'VALIDATION.INVALID_INPUT', message: `${field} must be a string` }, 422)
-    }
-    const trimmed = raw.trim()
-    if (!trimmed) {
-      if (required) {
-        throw new HttpException({ code: 'VALIDATION.INVALID_INPUT', message: `${field} is required` }, 422)
-      }
-      return undefined
-    }
-    if (trimmed.length > MAX_SEAT_ID_LENGTH) {
-      throw new HttpException({ code: 'VALIDATION.INVALID_INPUT', message: `${field} exceeds max length` }, 422)
-    }
-    return trimmed
-  }
-
   private normalizeCommitItems(body: CommitRequest): NormalizedCommitItem[] {
     return this.normalizeMeterItems(body?.meters, 'items')
   }
@@ -2747,7 +2732,6 @@ export class GateService {
     featureFamilyCode?: string | null
     estimatedQuantity?: number
     budgetId?: string
-    seatId?: string
     labels?: Record<string, string> | undefined
   }): string {
     return hashRequest({
@@ -2757,7 +2741,6 @@ export class GateService {
       feature_family_code: payload.featureFamilyCode ?? null,
       estimated_quantity_minor: payload.estimatedQuantity ?? null,
       budget_id: payload.budgetId ?? null,
-      seat_id: payload.seatId ?? null,
       labels: payload.labels ?? null,
     })
   }
@@ -2766,7 +2749,6 @@ export class GateService {
     leaseToken: string
     featureCode: string
     quantityMinor: number
-    seatId?: string
     labels?: Record<string, string> | undefined
     items: NormalizedCommitItem[]
   }): string {
@@ -2775,7 +2757,6 @@ export class GateService {
       lease_token: payload.leaseToken,
       feature_code: payload.featureCode,
       quantity_minor: payload.quantityMinor,
-      seat_id: payload.seatId ?? null,
       labels: payload.labels ?? null,
       items: payload.items.map((item) => ({
         meter_code: item.meter_code,
@@ -2822,6 +2803,7 @@ export class GateService {
     db: Kysely<Database>,
     params: {
       realmId: string
+      billingUserId: string
       billingAccountId: string
       profile: 'conservative' | 'optimistic'
       asOf: Date
@@ -2835,6 +2817,7 @@ export class GateService {
     }
 
     const grantBalances = await this.grantBalanceService.getAccountGrantBalances(db, {
+      billingUserId: params.billingUserId,
       billingAccountId: params.billingAccountId,
       asOf: params.asOf,
     })
@@ -2862,6 +2845,7 @@ export class GateService {
           'b.window_end as window_end',
         ])
         .where('b.budget_id', '=', budgetId)
+        .where('b.billing_user_id', '=', params.billingUserId)
         .where('b.billing_account_id', '=', params.billingAccountId)
         .where('ba.realm_id', '=', params.realmId)
         .executeTakeFirst()

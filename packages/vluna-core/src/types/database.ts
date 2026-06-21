@@ -81,9 +81,22 @@ export interface Database {
     billing_account_id: Generated<string>
     realm_id: string
     billing_principal_id: string
-    current_bundle_id: ColumnType<string | null, string | null | undefined, string | null | undefined>
+    seat_limit: ColumnType<number | null, number | null | undefined, number | null | undefined>
+    seat_limit_source: ColumnType<string | null, string | null | undefined, string | null | undefined>
+    seat_limit_updated_at: ColumnType<Date | null, Date | null | undefined, Date | null | undefined>
     metadata: ColumnType<Record<string, unknown>, Record<string, unknown> | undefined, Record<string, unknown> | undefined>
     created_at: Generated<Date>
+    updated_at: Generated<Date>
+  }
+  billing_users: {
+    billing_user_id: Generated<string>
+    realm_id: string
+    billing_account_id: string
+    business_user_id: string
+    status: ColumnType<'active' | 'disabled' | 'deleted', 'active' | 'disabled' | 'deleted' | undefined, 'active' | 'disabled' | 'deleted' | undefined>
+    metadata: ColumnType<Record<string, unknown>, Record<string, unknown> | undefined, Record<string, unknown> | undefined>
+    created_at: Generated<Date>
+    updated_at: Generated<Date>
   }
   billing_account_billing_details: {
     billing_account_id: string
@@ -114,6 +127,8 @@ export interface Database {
   billing_plan_assignments: {
     assignment_id: Generated<string>
     billing_account_id: string
+    assignment_scope: ColumnType<'account' | 'user', 'account' | 'user', 'account' | 'user'>
+    billing_user_id: ColumnType<string | null, string | null | undefined, string | null | undefined>
     plan_id: string
     subscription_item_id: ColumnType<string | null, string | null | undefined, string | null | undefined>
     source_kind: 'signup.default' | 'provider.subscription_item' | 'provider.subscription' | 'ops.manual' | 'ops.campaign'
@@ -180,6 +195,7 @@ export interface Database {
   // Wallet
   ledger_accounts: {
     ledger_id: Generated<string>
+    billing_user_id: string
     billing_account_id: string
     currency_code: string
     balance_xusd: string
@@ -188,6 +204,7 @@ export interface Database {
   ledger_entries: {
     entry_id: Generated<string>
     ledger_id: string
+    billing_user_id: string
     billing_account_id: string
     amount_xusd: ColumnType<string, string | number, string | number>
     reason: 'adjustment' | 'purchase' | 'consumption' | 'transfer' | 'refund' | 'reversal'
@@ -244,6 +261,7 @@ export interface Database {
   }
   grant_assignments: {
     assignment_id: Generated<string>
+    billing_user_id: string
     billing_account_id: string
     program_id: string
     billing_plan_assignment_id: ColumnType<string | null, string | null | undefined, string | null | undefined>
@@ -268,6 +286,7 @@ export interface Database {
   }
   ledger_grants: {
     grant_id: Generated<string>
+    billing_user_id: string
     billing_account_id: string
     ledger_id: ColumnType<string | null, string | null | undefined, string | null | undefined>
     assignment_id: string
@@ -328,6 +347,7 @@ export interface Database {
   billing_events: {
     event_id: Generated<string>
     realm_id: string
+    billing_user_id: string
     billing_account_id: string
     semantic_kind: 'activity' | 'outcome'
     occurred_at: Date
@@ -368,6 +388,7 @@ export interface Database {
   billing_event_processing: {
     billing_event_id: string
     realm_id: string
+    billing_user_id: string
     billing_account_id: string
     policy_id: string
     policy_version: string
@@ -385,6 +406,7 @@ export interface Database {
   }
   billing_event_ratings: {
     realm_id: string
+    billing_user_id: string
     billing_account_id: string
     billing_event_id: string
     rating_id: string
@@ -399,6 +421,7 @@ export interface Database {
   billing_ratings_aggregation_runs: {
     run_id: Generated<string>
     realm_id: string
+    billing_user_id: string
     billing_account_id: string
     contract_id: string | null
     policy_id: string
@@ -700,7 +723,8 @@ export interface Database {
     name: string
     description: ColumnType<string | null, string | undefined, string | null | undefined>
     feature_code: string
-    kind: 'rate' | 'quota' | 'seats'
+    kind: 'rate' | 'quota'
+    subject_scope: ColumnType<'account' | 'user', 'account' | 'user' | undefined, 'account' | 'user'>
     unit: string
     window_sec: number
     limit_count: ColumnType<string | null, string | number | null | undefined, string | number | null | undefined>
@@ -723,6 +747,7 @@ export interface Database {
   }
   budgets: {
     budget_id: Generated<string>
+    billing_user_id: string
     billing_account_id: string
     name: ColumnType<string | null, string | undefined, string | null | undefined>
     status: 'active' | 'closing' | 'closed' | 'expired' | 'canceled'
@@ -743,6 +768,7 @@ export interface Database {
   }
   gate_leases: {
     lease_id: Generated<string>
+    billing_user_id: string
     billing_account_id: string
     policy_id: string
     feature_code: string
@@ -757,22 +783,10 @@ export interface Database {
     created_at: Generated<Date>
     updated_at: Generated<Date>
   }
-  gate_seats: {
-    seat_row_id: Generated<string>
-    billing_account_id: string
-    feature_code: string
-    seat_id: string
-    state: 'active' | 'revoked'
-    assigned_at: Generated<Date>
-    last_seen_at: Generated<Date>
-    revoked_at: ColumnType<Date | null, Date | null | undefined, Date | null | undefined>
-    metadata: ColumnType<Record<string, unknown>, Record<string, unknown> | undefined, Record<string, unknown> | undefined>
-    created_at: Generated<Date>
-    updated_at: Generated<Date>
-  }
   billing_ratings: {
     rating_id: Generated<string>
     realm_id: string
+    billing_user_id: string
     billing_account_id: string
     rating_kind: Generated<'gate' | 'ingest'>
     idempotency_id: string
@@ -823,6 +837,7 @@ export interface Database {
     realm_id: string
     rating_id: string
     direction: Generated<'debit' | 'credit'>
+    billing_user_id: string
     billing_account_id: string
     budget_id: ColumnType<string | null, string | null | undefined, string | null | undefined>
     feature_code: string
@@ -869,6 +884,7 @@ export interface Database {
     operation: string
     scope_type: string
     scope_id: ColumnType<string | null, string | null | undefined, string | null | undefined>
+    billing_user_id: ColumnType<string | null, string | null | undefined, string | null | undefined>
     billing_account_id: ColumnType<string | null, string | null | undefined, string | null | undefined>
     key: string
     request_hash: string
@@ -882,6 +898,9 @@ export interface Database {
   }
   gate_quota_counters: {
     counter_id: Generated<string>
+    subject_scope: 'account' | 'user'
+    subject_id: string
+    billing_user_id: ColumnType<string | null, string | null | undefined, string | null | undefined>
     billing_account_id: string
     feature_code: string
     key: string
@@ -893,6 +912,7 @@ export interface Database {
     updated_at: Generated<Date>
   }
   gate_residual_buckets: {
+    billing_user_id: string
     billing_account_id: string
     meter_code: string
     pricing_fingerprint: string

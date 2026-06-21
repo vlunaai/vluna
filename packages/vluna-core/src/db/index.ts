@@ -153,37 +153,43 @@ export async function dropAllTables(opts?: { schema?: string }): Promise<void> {
   }
 }
 
-export async function setRlsSession(trx: Kysely<Database> | Transaction<Database>, p: { realmId?: string; billingAccountId?: string; isRealmAdmin?: boolean }) {
+export async function setRlsSession(trx: Kysely<Database> | Transaction<Database>, p: { realmId?: string; billingAccountId?: string; billingUserId?: string; isRealmAdmin?: boolean }) {
   const realm = p.realmId || ''
   const ba = p.billingAccountId || ''
+  const bu = p.billingUserId || ''
   const admin = p.isRealmAdmin ? 'true' : 'false'
   await sql`select set_config('app.realm_id', ${realm}, true)`.execute(trx)
   await sql`select set_config('app.billing_account_id', ${ba}, true)`.execute(trx)
+  await sql`select set_config('app.billing_user_id', ${bu}, true)`.execute(trx)
   await sql`select set_config('app.is_realm_admin', ${admin}, true)`.execute(trx)
 }
 
 
-export async function getRlsSession(trx: Kysely<Database> | Transaction<Database>): Promise<{ realmId?: string; billingAccountId?: string; isRealmAdmin?: boolean }> {
+export async function getRlsSession(trx: Kysely<Database> | Transaction<Database>): Promise<{ realmId?: string; billingAccountId?: string; billingUserId?: string; isRealmAdmin?: boolean }> {
   const result = await sql<{
     realm_id: string | null
     billing_account_id: string | null
+    billing_user_id: string | null
     is_realm_admin: string | null
   }>`
     select
       current_setting('app.realm_id', true) as realm_id,
       current_setting('app.billing_account_id', true) as billing_account_id,
+      current_setting('app.billing_user_id', true) as billing_user_id,
       current_setting('app.is_realm_admin', true) as is_realm_admin
   `.execute(trx)
 
   const row = result.rows[0] ?? {
     realm_id: null,
     billing_account_id: null,
+    billing_user_id: null,
     is_realm_admin: null,
   }
 
   const realmId = row.realm_id?.trim() || undefined
   const billingAccountId = row.billing_account_id?.trim() || undefined
+  const billingUserId = row.billing_user_id?.trim() || undefined
   const isRealmAdmin = row.is_realm_admin === 'true'
 
-  return { realmId, billingAccountId, isRealmAdmin }
+  return { realmId, billingAccountId, billingUserId, isRealmAdmin }
 }

@@ -4,6 +4,7 @@ import { sql } from 'kysely'
 import { setRlsSession } from '../../../db/index.js'
 import type { AppRequest } from '../../../types/app-request.js'
 import type { Database } from '../../../types/database.js'
+import { invalidateGateRuntimeCaches } from './quota.service.js'
 
 type GatePolicy = {
   policy_id: string
@@ -12,7 +13,8 @@ type GatePolicy = {
   name: string
   description?: string | null
   feature_code: string
-  kind: 'rate' | 'quota' | 'seats'
+  kind: 'rate' | 'quota'
+  subject_scope: 'account' | 'user'
   unit: string
   window_sec: number
   limit_count?: string | null
@@ -93,7 +95,18 @@ function parsePolicyKind(value: unknown, name: string): GatePolicy['kind'] {
     throw new HttpException({ code: 'VALIDATION.INVALID_INPUT', message: `${name} must be a string` }, 422)
   }
   const normalized = value.trim().toLowerCase()
-  if (normalized === 'rate' || normalized === 'quota' || normalized === 'seats') {
+  if (normalized === 'rate' || normalized === 'quota') {
+    return normalized
+  }
+  throw new HttpException({ code: 'VALIDATION.INVALID_INPUT', message: `${name} is invalid` }, 422)
+}
+
+function parseSubjectScope(value: unknown, name: string): GatePolicy['subject_scope'] {
+  if (typeof value !== 'string') {
+    throw new HttpException({ code: 'VALIDATION.INVALID_INPUT', message: `${name} must be a string` }, 422)
+  }
+  const normalized = value.trim().toLowerCase()
+  if (normalized === 'account' || normalized === 'user') {
     return normalized
   }
   throw new HttpException({ code: 'VALIDATION.INVALID_INPUT', message: `${name} is invalid` }, 422)
@@ -128,7 +141,7 @@ function validatePolicyShape(params: {
   limit_count?: string | null
   limit_minor?: string | null
 }): void {
-  const { kind, unit, window_sec, limit_count, limit_minor } = params
+  const { kind, window_sec, limit_count, limit_minor } = params
   if (kind === 'quota') {
     if (!limit_minor || limit_count !== null) {
       throw new HttpException({ code: 'VALIDATION.INVALID_INPUT', message: 'quota policies require limit_minor and no limit_count' }, 422)
@@ -142,16 +155,6 @@ function validatePolicyShape(params: {
     }
     if (window_sec < 0) {
       throw new HttpException({ code: 'VALIDATION.INVALID_INPUT', message: 'rate policies require window_sec >= 0' }, 422)
-    }
-  } else if (kind === 'seats') {
-    if (!limit_count || limit_minor !== null) {
-      throw new HttpException({ code: 'VALIDATION.INVALID_INPUT', message: 'seats policies require limit_count and no limit_minor' }, 422)
-    }
-    if (unit !== 'seat') {
-      throw new HttpException({ code: 'VALIDATION.INVALID_INPUT', message: 'seats policies require unit=seat' }, 422)
-    }
-    if (window_sec < 0) {
-      throw new HttpException({ code: 'VALIDATION.INVALID_INPUT', message: 'seats policies require window_sec >= 0' }, 422)
     }
   }
 }
@@ -167,6 +170,7 @@ export class GatePoliciesService {
     const bundleKey = normalizeString(query?.bundle_key)
     const featureCode = normalizeString(query?.feature_code)
     const kind = normalizeString(query?.kind)
+    const subjectScope = normalizeString(query?.subject_scope)
     const status = normalizeString(query?.status)
 
     let builder = trx
@@ -180,6 +184,7 @@ export class GatePoliciesService {
         'p.description as description',
         'p.feature_code as feature_code',
         'p.kind as kind',
+        'p.subject_scope as subject_scope',
         'p.unit as unit',
         'p.window_sec as window_sec',
         'p.limit_count as limit_count',
@@ -205,6 +210,9 @@ export class GatePoliciesService {
     if (kind) {
       builder = builder.where('p.kind', '=', parsePolicyKind(kind, 'kind'))
     }
+    if (subjectScope) {
+      builder = builder.where('p.subject_scope', '=', parseSubjectScope(subjectScope, 'subject_scope'))
+    }
     if (status) {
       builder = builder.where('p.status', '=', parsePolicyStatus(status, 'status'))
     }
@@ -222,6 +230,7 @@ export class GatePoliciesService {
       description: row.description ?? null,
       feature_code: String(row.feature_code),
       kind: row.kind as GatePolicy['kind'],
+      subject_scope: row.subject_scope as GatePolicy['subject_scope'],
       unit: String(row.unit),
       window_sec: Number(row.window_sec),
       limit_count: row.limit_count === null ? null : String(row.limit_count),
@@ -261,6 +270,7 @@ export class GatePoliciesService {
         'p.description as description',
         'p.feature_code as feature_code',
         'p.kind as kind',
+        'p.subject_scope as subject_scope',
         'p.unit as unit',
         'p.window_sec as window_sec',
         'p.limit_count as limit_count',
@@ -287,6 +297,7 @@ export class GatePoliciesService {
       description: row.description ?? null,
       feature_code: String(row.feature_code),
       kind: row.kind as GatePolicy['kind'],
+      subject_scope: row.subject_scope as GatePolicy['subject_scope'],
       unit: String(row.unit),
       window_sec: Number(row.window_sec),
       limit_count: row.limit_count === null ? null : String(row.limit_count),
@@ -316,6 +327,10 @@ export class GatePoliciesService {
     if (!kind) {
       throw new HttpException({ code: 'VALIDATION.INVALID_INPUT', message: 'kind is required' }, 422)
     }
+    if (body?.subject_scope === undefined) {
+      throw new HttpException({ code: 'VALIDATION.INVALID_INPUT', message: 'subject_scope is required' }, 422)
+    }
+    const subjectScope = parseSubjectScope(body?.subject_scope, 'subject_scope')
     const unit = normalizeString(body?.unit)
     if (!unit) {
       throw new HttpException({ code: 'VALIDATION.INVALID_INPUT', message: 'unit is required' }, 422)
@@ -359,6 +374,7 @@ export class GatePoliciesService {
         description: description ?? undefined,
         feature_code: featureCode,
         kind,
+        subject_scope: subjectScope,
         unit,
         window_sec: windowSec,
         limit_count: limitCount ?? null,
@@ -370,6 +386,7 @@ export class GatePoliciesService {
       .returning(['policy_id'])
       .executeTakeFirstOrThrow()
 
+    invalidateGateRuntimeCaches()
     const policy = await this.getPolicy(req, String(row.policy_id))
     return { policy }
   }
@@ -388,6 +405,7 @@ export class GatePoliciesService {
         'description',
         'feature_code',
         'kind',
+        'subject_scope',
         'unit',
         'window_sec',
         'limit_count',
@@ -413,6 +431,9 @@ export class GatePoliciesService {
     const description = body?.description === undefined ? (existing.description ?? null) : (body.description as string | null)
     const featureCode = body?.feature_code === undefined ? String(existing.feature_code) : normalizeString(body?.feature_code)
     const kind = body?.kind === undefined ? (existing.kind as GatePolicy['kind']) : parsePolicyKind(body?.kind, 'kind')
+    const subjectScope = body?.subject_scope === undefined
+      ? (existing.subject_scope as GatePolicy['subject_scope'])
+      : parseSubjectScope(body?.subject_scope, 'subject_scope')
     const unit = body?.unit === undefined ? String(existing.unit) : normalizeString(body?.unit)
     const windowSec = body?.window_sec === undefined ? Number(existing.window_sec) : (parseWindowSec(body?.window_sec) ?? Number(existing.window_sec))
     const limitCount = body?.limit_count === undefined ? (existing.limit_count === null ? null : String(existing.limit_count)) : parseOptionalInteger(body?.limit_count, 'limit_count')
@@ -440,6 +461,7 @@ export class GatePoliciesService {
         description,
         feature_code: featureCode,
         kind,
+        subject_scope: subjectScope,
         unit,
         window_sec: windowSec,
         limit_count: limitCount ?? null,
@@ -453,6 +475,7 @@ export class GatePoliciesService {
       .where('policy_id', '=', id)
       .executeTakeFirst()
 
+    invalidateGateRuntimeCaches()
     return this.getPolicy(req, id)
   }
 
@@ -480,6 +503,7 @@ export class GatePoliciesService {
       .where('policy_id', '=', id)
       .executeTakeFirst()
 
+    invalidateGateRuntimeCaches()
     return { deleted: true }
   }
 

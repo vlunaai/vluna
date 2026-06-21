@@ -37,13 +37,24 @@ export type RequestContext = {
   user?: ManagementUser
   // Derived billing account identifier (server-side mapping)
   billingAccountId?: string
+  // Derived runtime billing user identifier (server-side mapping)
+  billingUserId?: string
+  // External business user identifier supplied by API/SDK callers.
+  businessUserId?: string
   // Realm-level admin (trusted guards only)
   isRealmAdmin?: boolean
   billingAccount?: {
     billingAccountId: string
     principalId?: string
     realmId: string
-    currentBundleId?: string | null
+    metadata?: Record<string, unknown>
+  }
+  billingUser?: {
+    billingUserId: string
+    billingAccountId: string
+    businessUserId: string
+    realmId: string
+    status?: 'active' | 'disabled' | 'deleted'
     metadata?: Record<string, unknown>
   }
   // Version markers for permissions change detection
@@ -70,7 +81,9 @@ export type RequestContext = {
   }
   serviceAuthBinding?: {
     principalId?: string
+    userId?: string
     billingAccountId?: string
+    billingUserId?: string
   }
   platformToken?: {
     scopes: string[]

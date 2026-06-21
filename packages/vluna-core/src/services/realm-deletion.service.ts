@@ -187,10 +187,6 @@ export async function cleanupRealmData(trx: DatabaseHandle, realmId: string): Pr
       .where('billing_account_id', 'in', billingAccountIds)
       .execute()
     await trx
-      .deleteFrom('gate_seats')
-      .where('billing_account_id', 'in', billingAccountIds)
-      .execute()
-    await trx
       .deleteFrom('ledger_grants')
       .where('billing_account_id', 'in', billingAccountIds)
       .execute()

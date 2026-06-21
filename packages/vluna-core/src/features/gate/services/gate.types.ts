@@ -15,6 +15,8 @@ export const WILDCARD_FEATURE_CODE = '__wildcard_feature__'
 export type PolicyWindowView = {
   policyId: string
   policyName: string
+  subjectScope: 'account' | 'user'
+  subjectId: string
   featureCode: string
   unit?: string | null
   limitMinor: number
@@ -31,6 +33,8 @@ export type CounterLookup = Map<string, number>
 
 export type QuotaWindowMetadataEntry = {
   policy_id: string
+  subject_scope: 'account' | 'user'
+  subject_id: string
   counter_key: string
   window_start: string
   window_end: string
@@ -40,6 +44,8 @@ export type QuotaWindowMetadataEntry = {
 
 export type RateWindowMetadataEntry = {
   policy_id: string
+  subject_scope: 'account' | 'user'
+  subject_id: string
   counter_key: string
   window_start: string
   window_end: string

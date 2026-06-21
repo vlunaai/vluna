@@ -42,7 +42,7 @@ export class PrincipalGuard implements CanActivate {
     const payload = claims as Record<string, unknown>
     const tokenUse = typeof payload.tu === 'string' ? payload.tu.toLowerCase() : undefined
     if (tokenUse !== 'plt' && tokenUse !== 'apt' && tokenUse !== 'platform' && tokenUse !== 'vluna') return null
-    const principalId = String(payload.principal_id || '').trim()
+    const principalId = String(payload.billing_principal_id || payload.principal_id || '').trim()
     if (!principalId) return null
     return { id: principalId, type: 'platform' }
   }

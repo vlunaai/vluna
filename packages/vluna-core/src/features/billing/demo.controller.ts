@@ -6,7 +6,7 @@ import { Scopes } from '../../auth/decorators/scopes.decorator.js'
 import { BILLING_SCOPES } from '../../auth/constants/scopes.constants.js'
 import { IdempotencyInterceptor } from '../../support/idempotency.interceptor.js'
 import { PrincipalGuard } from '../../auth/guards/principal.guard.js'
-import { PrincipalBillingAccountGuard } from '../../auth/guards/principal-billing-account.guard.js'
+import { BillingAccountGuard } from '../../auth/guards/billing-account.guard.js'
 import { RealmMembershipGuard } from '../../auth/guards/realm-membership.guard.js'
 import type { AppRequest } from '../../types/app-request.js'
 
@@ -16,7 +16,7 @@ type Claims = { sub?: string; scope?: string | string[] }
 
 @Controller('billing/demo')
 export class BillingDemoController {
-  @UseGuards(RealmGuard, TokenClaimsGuard, RealmMembershipGuard, PrincipalGuard, PrincipalBillingAccountGuard)
+  @UseGuards(RealmGuard, TokenClaimsGuard, RealmMembershipGuard, PrincipalGuard, BillingAccountGuard)
   @Scopes(BILLING_SCOPES.READ_ALL)
   @Get('read')
   read(@Req() req: AppRequest) {
@@ -34,7 +34,7 @@ export class BillingDemoController {
     })
   }
 
-  @UseGuards(RealmGuard, TokenClaimsGuard, RealmMembershipGuard, PrincipalGuard, PrincipalBillingAccountGuard)
+  @UseGuards(RealmGuard, TokenClaimsGuard, RealmMembershipGuard, PrincipalGuard, BillingAccountGuard)
   @Scopes(BILLING_SCOPES.WRITE)
   @UseInterceptors(IdempotencyInterceptor)
   @Post('write')

@@ -16,6 +16,7 @@ type BudgetStatus = 'active' | 'closing' | 'closed' | 'expired' | 'canceled'
 type ClaimedSettlementRow = {
   allocation_id: string
   rating_id: string
+  billing_user_id: string
   billing_account_id: string
   budget_id: string | null
   amount_xusd: string
@@ -51,6 +52,8 @@ type FundingAllocationPlan = {
 }
 
 type GroupedSettlement = {
+  billingUserId: string
+  billingAccountId: string
   allocationIds: string[]
   onLedgerAllocationIds: string[]
   offLedgerAllocationIds: string[]
@@ -144,6 +147,7 @@ export class SettlementService {
       realmId: string
       featureCode: string
       commitId: string
+      billingUserId: string
       billingAccountId: string
       canonicalAmountXusd: bigint
       canonicalCostXusd: bigint
@@ -219,6 +223,7 @@ export class SettlementService {
         realm_id: params.realmId,
         feature_code: params.featureCode,
         rating_id: params.commitId,
+        billing_user_id: params.billingUserId,
         billing_account_id: params.billingAccountId,
         amount_xusd: params.canonicalAmountXusd.toString(),
         cost_xusd: params.canonicalCostXusd.toString(),
@@ -267,6 +272,7 @@ export class SettlementService {
             late_rating: sql`excluded.late_rating`,
             realm_id: sql`excluded.realm_id`,
             feature_code: sql`excluded.feature_code`,
+            billing_user_id: sql`excluded.billing_user_id`,
             billing_account_id: sql`excluded.billing_account_id`,
             budget_id: sql`excluded.budget_id`,
             pricing_fingerprint: sql`excluded.pricing_fingerprint`,
@@ -304,7 +310,7 @@ export class SettlementService {
 
   async planFundingAllocations(
     trx: Kysely<Database> | Transaction<Database>,
-    params: { realmId: string; billingAccountId: string; amountXusd: bigint; now: Date },
+    params: { realmId: string; billingUserId: string; billingAccountId: string; amountXusd: bigint; now: Date },
   ): Promise<FundingAllocationPlan> {
     const required = params.amountXusd > 0n ? params.amountXusd : 0n
     if (required === 0n) {
@@ -318,6 +324,7 @@ export class SettlementService {
     })
 
     const balances = await this.grantBalanceService.getAccountGrantBalances(trx, {
+      billingUserId: params.billingUserId,
       billingAccountId: params.billingAccountId,
       asOf: params.now,
       includeExpired: false,
@@ -367,6 +374,7 @@ export class SettlementService {
       fallbackGrantId = fallbackGrantId
         ?? (await ensureFallbackGrantForPeriod(trx, {
           realmId: params.realmId,
+          billingUserId: params.billingUserId,
           billingAccountId: params.billingAccountId,
           periodStart: period.periodStart,
           periodEnd: period.periodEnd,
@@ -742,6 +750,7 @@ export class SettlementService {
       .returning([
         'allocation_id',
         'rating_id',
+        'billing_user_id',
         'billing_account_id',
         'budget_id',
         'amount_xusd',
@@ -806,12 +815,13 @@ export class SettlementService {
     claimed: ClaimedSettlementRow[],
     context: BatchContext,
   ): Promise<{ settledCount: number; totalPosted: bigint; errors: SettlementBatchResult['errors'] }> {
-    const groups = this.groupByBillingAccount(claimed)
+    const groups = this.groupByBillingUser(claimed)
     const errors: SettlementBatchResult['errors'] = []
     let settledCount = 0
     let totalPosted = 0n
 
-    for (const [billingAccountId, group] of groups) {
+    for (const [billingUserId, group] of groups) {
+      const billingAccountId = group.billingAccountId
       if (group.totalApplied < 0n) {
         await this.markError(trx, group.allocationIds, 'SETTLEMENT.INVALID_AMOUNT', 'applied_amount_xusd must be non-negative', context.now)
         errors.push({ billingAccountId, reason: 'invalid_amount', details: 'applied_amount_xusd must be non-negative' })
@@ -822,6 +832,7 @@ export class SettlementService {
         scopeKind: context.scopeKind,
         scopeKey: context.scopeKey,
         batchId: context.batchId,
+        billingUserId,
         billingAccountId,
         pricingFingerprints: Array.from(group.pricingFingerprints),
       })
@@ -834,6 +845,7 @@ export class SettlementService {
         if (needsLedgerPosting) {
           postedAmountXusd = -group.billableApplied
           const ledgerResult = await appendLedgerEntry(trx, {
+            billingUserId,
             billingAccountId,
             currencyCode: WALLET_LEDGER_CURRENCY,
             amountXusd: postedAmountXusd,
@@ -882,13 +894,15 @@ export class SettlementService {
     return { settledCount, totalPosted, errors }
   }
 
-  private groupByBillingAccount(rows: ClaimedSettlementRow[]) {
+  private groupByBillingUser(rows: ClaimedSettlementRow[]) {
     return rows.reduce(
       (acc, row) => {
         const applied = bigintFromUnknown(row.applied_amount_xusd) ?? 0n
         const bucket =
-          acc.get(row.billing_account_id) ??
+          acc.get(row.billing_user_id) ??
           ({
+            billingUserId: row.billing_user_id,
+            billingAccountId: row.billing_account_id,
             allocationIds: [] as string[],
             onLedgerAllocationIds: [] as string[],
             offLedgerAllocationIds: [] as string[],
@@ -916,7 +930,7 @@ export class SettlementService {
           }
         }
 
-        acc.set(row.billing_account_id, bucket)
+        acc.set(row.billing_user_id, bucket)
         return acc
       },
       new Map<string, GroupedSettlement>(),
@@ -1115,10 +1129,11 @@ export class SettlementService {
     scopeKind: string
     scopeKey: string
     batchId: string
+    billingUserId: string
     billingAccountId: string
     pricingFingerprints: string[]
   }): string {
-    const base = `scope:${params.scopeKind}:${params.scopeKey}:batch:${params.batchId}:ba:${params.billingAccountId}`
+    const base = `scope:${params.scopeKind}:${params.scopeKey}:batch:${params.batchId}:ba:${params.billingAccountId}:bu:${params.billingUserId}`
     if (!params.pricingFingerprints.length) {
       return base
     }

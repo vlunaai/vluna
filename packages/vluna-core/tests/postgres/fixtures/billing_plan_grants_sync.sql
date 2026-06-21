@@ -7,6 +7,7 @@ drop table if exists grant_campaigns cascade;
 drop table if exists grant_programs cascade;
 drop table if exists billing_plan_assignments cascade;
 drop table if exists billing_plans cascade;
+drop table if exists billing_users cascade;
 drop table if exists billing_accounts cascade;
 drop table if exists realms cascade;
 drop function if exists mark_grants_switch_dirty() cascade;
@@ -26,27 +27,45 @@ create table if not exists billing_accounts (
   billing_account_id uuid primary key default gen_random_uuid(),
   realm_id text not null references realms(realm_id) on delete restrict,
   billing_principal_id text not null,
-  current_bundle_id bigint null,
   metadata jsonb not null default '{}'::jsonb,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
   unique (realm_id, billing_principal_id)
 );
 
--- Mark billing_accounts.metadata.grants_switch.dirty=true when billing_plan_assignments change.
+create table if not exists billing_users (
+  billing_user_id uuid primary key default gen_random_uuid(),
+  realm_id text not null references realms(realm_id) on delete restrict,
+  billing_account_id uuid not null references billing_accounts(billing_account_id) on delete cascade,
+  business_user_id text not null,
+  status text not null default 'active' check (status in ('active','disabled','deleted')),
+  metadata jsonb not null default '{}'::jsonb,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  unique (realm_id, billing_account_id, business_user_id)
+);
+
+-- Mark billing_users.metadata.grants_switch.dirty=true when billing_plan_assignments change.
 create or replace function mark_grants_switch_dirty()
 returns trigger
 language plpgsql
 as $$
 declare
+  bu uuid;
   ba uuid;
+  scope text;
 begin
+  bu := coalesce(new.billing_user_id, old.billing_user_id);
   ba := coalesce(new.billing_account_id, old.billing_account_id);
-  if ba is null then
+  scope := coalesce(new.assignment_scope, old.assignment_scope, 'user');
+  if scope = 'user' and bu is null then
+    return null;
+  end if;
+  if scope = 'account' and ba is null then
     return null;
   end if;
 
-  update billing_accounts
+  update billing_users
   set
     metadata =
       coalesce(metadata, '{}'::jsonb)
@@ -59,7 +78,9 @@ begin
         )
       ),
     updated_at = now()
-  where billing_account_id = ba;
+  where
+    (scope = 'user' and billing_user_id = bu)
+    or (scope = 'account' and billing_account_id = ba and status = 'active');
 
   return null;
 end;
@@ -82,6 +103,8 @@ create table if not exists billing_plans (
 create table if not exists billing_plan_assignments (
   assignment_id bigserial primary key,
   billing_account_id uuid not null references billing_accounts(billing_account_id) on delete cascade,
+  assignment_scope text not null default 'user' check (assignment_scope in ('account','user')),
+  billing_user_id uuid null references billing_users(billing_user_id) on delete cascade,
   plan_id bigint not null references billing_plans(plan_id) on delete restrict,
   subscription_item_id bigint null,
   source_kind text not null check (source_kind in (
@@ -95,8 +118,19 @@ create table if not exists billing_plan_assignments (
   metadata jsonb not null default '{}'::jsonb,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
-  constraint ux_bpa_account_plan_source unique (billing_account_id, plan_id, source_kind, source_ref)
+  constraint chk_bpa_assignment_scope_user check (
+    (assignment_scope = 'account' and billing_user_id is null)
+    or (assignment_scope = 'user' and billing_user_id is not null)
+  )
 );
+
+create unique index if not exists ux_bpa_user_plan_source
+  on billing_plan_assignments (billing_user_id, plan_id, source_kind, source_ref)
+  where assignment_scope = 'user' and billing_user_id is not null;
+
+create unique index if not exists ux_bpa_account_plan_source
+  on billing_plan_assignments (billing_account_id, plan_id, source_kind, source_ref)
+  where assignment_scope = 'account';
 
 drop trigger if exists trg_bpa_mark_grants_switch_dirty on billing_plan_assignments;
 create trigger trg_bpa_mark_grants_switch_dirty
@@ -143,6 +177,7 @@ create table if not exists grant_campaigns (
 create table if not exists grant_assignments (
   assignment_id bigserial primary key,
   billing_account_id uuid not null references billing_accounts(billing_account_id) on delete cascade,
+  billing_user_id uuid not null references billing_users(billing_user_id) on delete cascade,
   program_id bigint not null references grant_programs(program_id) on delete restrict,
   billing_plan_assignment_id bigint null references billing_plan_assignments(assignment_id) on delete set null,
   campaign_id bigint null references grant_campaigns(campaign_id) on delete set null,
@@ -158,7 +193,7 @@ create table if not exists grant_assignments (
   metadata jsonb not null default '{}'::jsonb,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
-  unique (billing_account_id, source_kind, source_ref, program_id),
+  unique (billing_user_id, source_kind, source_ref, program_id),
   constraint chk_ga_bpa_id_required check (source_kind <> 'billing_plan_assignment' or billing_plan_assignment_id is not null),
   constraint chk_ga_campaign_id_required check (source_kind <> 'ops.campaign' or campaign_id is not null)
 );

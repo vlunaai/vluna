@@ -2,6 +2,7 @@ import crypto from 'node:crypto'
 import { sql, type Insertable, type Kysely, type Transaction } from 'kysely'
 import { setRlsSession } from '../db/index.js'
 import type { Database } from '../types/database.js'
+import { invalidateGateRuntimeCaches } from '../features/gate/services/quota.service.js'
 import {
   ensureGrantAssignment,
   issueGrantForAssignment,
@@ -74,6 +75,22 @@ function writeGrantsSwitchMetadata(
   return {
     ...metadata,
     grants_switch: next,
+  }
+}
+
+function assertNoRuntimeGateBundleAssignmentMetadata(metadata: Record<string, unknown>): void {
+  if (Object.prototype.hasOwnProperty.call(metadata, 'gate_bundle_key')) {
+    throw new Error('billing_plan_assignment metadata must not contain gate_bundle_key')
+  }
+  const gating = metadata.gating
+  if (gating && typeof gating === 'object' && !Array.isArray(gating)) {
+    const gatingObj = gating as Record<string, unknown>
+    if (
+      Object.prototype.hasOwnProperty.call(gatingObj, 'gate_bundle_key') ||
+      Object.prototype.hasOwnProperty.call(gatingObj, 'bundle')
+    ) {
+      throw new Error('billing_plan_assignment metadata must not contain runtime gate bundle fields')
+    }
   }
 }
 
@@ -206,6 +223,7 @@ export async function upsertBillingPlan(
     }
   }
 
+  invalidateGateRuntimeCaches()
   return String(row.plan_id)
 }
 
@@ -213,6 +231,8 @@ export async function ensureBillingPlanAssignment(
   dbOrTrx: DbOrTrx,
   params: {
     billingAccountId: string
+    assignmentScope?: 'account' | 'user'
+    billingUserId?: string | null
     planId: string
     subscriptionItemId?: string | null
     sourceKind: Database['billing_plan_assignments']['source_kind']
@@ -224,9 +244,20 @@ export async function ensureBillingPlanAssignment(
   },
 ): Promise<Database['billing_plan_assignments']> {
   const metadata = params.metadata ?? {}
+  assertNoRuntimeGateBundleAssignmentMetadata(metadata)
+  const assignmentScope = params.assignmentScope ?? 'user'
+  const billingUserId = params.billingUserId ?? null
+  if (assignmentScope === 'user' && !billingUserId) {
+    throw new Error('billing_user_id is required for user-scoped billing_plan_assignment')
+  }
+  if (assignmentScope === 'account' && billingUserId) {
+    throw new Error('billing_user_id must be null for account-scoped billing_plan_assignment')
+  }
 
   const insert: Insertable<Database['billing_plan_assignments']> = {
     billing_account_id: params.billingAccountId,
+    assignment_scope: assignmentScope,
+    billing_user_id: billingUserId,
     plan_id: params.planId,
     subscription_item_id: params.subscriptionItemId ?? null,
     source_kind: params.sourceKind,
@@ -240,197 +271,52 @@ export async function ensureBillingPlanAssignment(
   const row = await dbOrTrx
     .insertInto('billing_plan_assignments')
     .values(insert)
-    .onConflict((oc) =>
-      oc
-        .columns(['billing_account_id', 'plan_id', 'source_kind', 'source_ref'])
-        .doUpdateSet({
-          window_start: sql`least(billing_plan_assignments.window_start, excluded.window_start)`,
-          window_end: sql`case
-            when excluded.window_end is null then billing_plan_assignments.window_end
-            when billing_plan_assignments.window_end is null then excluded.window_end
-            else greatest(billing_plan_assignments.window_end, excluded.window_end)
-          end`,
-          subscription_item_id: sql`excluded.subscription_item_id`,
-          status: sql`excluded.status`,
-          metadata: sql`excluded.metadata`,
-          updated_at: sql`now()`,
-        }),
-    )
+    .onConflict((oc) => {
+      const update = {
+        window_start: sql<Date>`least(billing_plan_assignments.window_start, excluded.window_start)`,
+        window_end: sql<Date | null>`case
+          when excluded.window_end is null then billing_plan_assignments.window_end
+          when billing_plan_assignments.window_end is null then excluded.window_end
+          else greatest(billing_plan_assignments.window_end, excluded.window_end)
+        end`,
+        subscription_item_id: sql<string | null>`excluded.subscription_item_id`,
+        status: sql<Database['billing_plan_assignments']['status']>`excluded.status`,
+        metadata: sql<Record<string, unknown>>`excluded.metadata`,
+        updated_at: sql<Date>`now()`,
+      }
+      return assignmentScope === 'account'
+        ? oc
+            .columns(['billing_account_id', 'plan_id', 'source_kind', 'source_ref'])
+            .where('assignment_scope', '=', 'account')
+            .doUpdateSet(update)
+        : oc
+            .columns(['billing_user_id', 'plan_id', 'source_kind', 'source_ref'])
+            .where('assignment_scope', '=', 'user')
+            .where('billing_user_id', 'is not', null)
+            .doUpdateSet(update)
+    })
     .returningAll()
     .executeTakeFirst()
 
   if (!row) {
     throw new Error('failed to ensure billing_plan_assignment')
   }
+  invalidateGateRuntimeCaches()
   return row as unknown as Database['billing_plan_assignments']
-}
-
-type GateBundleCandidate = {
-  bundle_key: string
-  priority: number
-  plan_id?: string | null
-  plan_code?: string | null
-  plan_kind?: string | null
-  assignment_id?: string | null
-}
-
-type GateBundleSelection = {
-  bundleId: string
-  planId: string | null
-  planCode: string | null
-  planKind: string | null
-  assignmentId: string | null
-}
-
-function compareGateBundleCandidates(a: GateBundleCandidate, b: GateBundleCandidate): number {
-  const priorityDiff = (b.priority ?? 0) - (a.priority ?? 0)
-  if (priorityDiff !== 0) return priorityDiff
-  return String(b.assignment_id ?? '').localeCompare(String(a.assignment_id ?? ''))
-}
-
-async function selectBestGateBundle(
-  trx: Transaction<Database>,
-  params: { realmId: string; billingAccountId: string; now?: Date; extraCandidates?: GateBundleCandidate[] },
-): Promise<GateBundleSelection | null> {
-  const now = params.now ?? new Date()
-
-  const activeBindings = await trx
-    .selectFrom('billing_plan_assignments as bpa')
-    .innerJoin('billing_plans as bpl', 'bpl.plan_id', 'bpa.plan_id')
-    .select([
-      'bpa.assignment_id',
-      'bpl.plan_id',
-      'bpl.plan_code',
-      'bpl.kind',
-      'bpa.metadata',
-      'bpl.priority',
-      sql`bpl.metadata`.as('plan_metadata'),
-    ])
-    .where('bpa.billing_account_id', '=', params.billingAccountId)
-    .where('bpa.status', '=', 'active')
-    .where((eb) =>
-      eb.and([
-        eb('bpa.window_start', '<=', now),
-        eb.or([eb('bpa.window_end', '>', now), eb('bpa.window_end', 'is', null)]),
-      ]),
-    )
-    .where('bpl.active', '=', true)
-    .where('bpl.kind', 'in', ['base', 'addon'])
-    .execute()
-
-  const candidates: GateBundleCandidate[] = []
-
-  for (const b of activeBindings) {
-    const meta = (b.metadata as Record<string, unknown> | null) ?? {}
-    const planMeta = (b.plan_metadata as Record<string, unknown> | null) ?? {}
-    const key =
-      typeof meta.gate_bundle_key === 'string'
-        ? meta.gate_bundle_key
-        : typeof planMeta.gate_bundle_key === 'string'
-          ? planMeta.gate_bundle_key
-          : null
-    if (key) {
-      candidates.push({
-        bundle_key: key,
-        priority: b.priority ?? 0,
-        plan_id: b.plan_id ? String(b.plan_id) : null,
-        plan_code: b.plan_code ? String(b.plan_code) : null,
-        plan_kind: b.kind ? String(b.kind) : null,
-        assignment_id: b.assignment_id ? String(b.assignment_id) : null,
-      })
-    }
-  }
-
-  if (params.extraCandidates && params.extraCandidates.length > 0) {
-    candidates.push(...params.extraCandidates.filter((c) => c.bundle_key))
-  }
-
-  if (candidates.length === 0) return null
-
-  const byKey = new Map<string, GateBundleCandidate>()
-  for (const c of candidates) {
-    const existing = byKey.get(c.bundle_key)
-    if (!existing || compareGateBundleCandidates(c, existing) < 0) {
-      byKey.set(c.bundle_key, c)
-    }
-  }
-
-  const keys = Array.from(byKey.keys())
-  if (keys.length === 0) return null
-
-  const bundleRows = await trx
-    .selectFrom('gate_policy_bundles')
-    .select(['bundle_id', 'bundle_key'])
-    .where('realm_id', '=', params.realmId)
-    .where('status', '=', 'active')
-    .where('bundle_key', 'in', keys)
-    .execute()
-
-  if (bundleRows.length === 0) return null
-  const bundleMap = new Map(bundleRows.map((row) => [String(row.bundle_key), String(row.bundle_id)]))
-
-  const sorted = Array.from(byKey.values()).sort(compareGateBundleCandidates)
-  for (const candidate of sorted) {
-    const id = bundleMap.get(candidate.bundle_key)
-    if (id) {
-      return {
-        bundleId: id,
-        planId: candidate.plan_id ?? null,
-        planCode: candidate.plan_code ?? null,
-        planKind: candidate.plan_kind ?? null,
-        assignmentId: candidate.assignment_id ?? null,
-      }
-    }
-  }
-  return null
-}
-
-export async function refreshBillingAccountState(
-  dbOrTrx: DbOrTrx,
-  billingAccountId: string,
-  extraCandidates?: GateBundleCandidate[],
-): Promise<void> {
-  const run = async (trx: Transaction<Database>) => {
-    const account = await trx
-      .selectFrom('billing_accounts')
-      .select(['billing_account_id', 'realm_id'])
-      .where('billing_account_id', '=', billingAccountId)
-      .executeTakeFirst()
-    if (!account) return
-
-    await setRlsSession(trx, {
-      realmId: account.realm_id,
-      billingAccountId,
-      isRealmAdmin: true,
-    })
-
-    const chosen = await selectBestGateBundle(trx, {
-      realmId: account.realm_id,
-      billingAccountId,
-      extraCandidates,
-    })
-
-    await trx
-      .updateTable('billing_accounts')
-      .set({ current_bundle_id: chosen?.bundleId ?? null })
-      .where('billing_account_id', '=', billingAccountId)
-      .execute()
-  }
-
-  await runInTransaction(dbOrTrx, run)
 }
 
 export async function ensureBillingPlanGrantsEnrollmentSynced(
   dbOrTrx: DbOrTrx,
   billingAccountId: string,
   now: Date = new Date(),
+  targetBillingUserId?: string,
 ): Promise<void> {
   const run = async (trx: Transaction<Database>) => {
     await acquireBillingPlanProfileLock(trx, billingAccountId)
 
     const account = await trx
       .selectFrom('billing_accounts')
-      .select(['billing_account_id', 'realm_id', 'metadata'])
+      .select(['billing_account_id', 'realm_id'])
       .where('billing_account_id', '=', billingAccountId)
       .forUpdate()
       .executeTakeFirst()
@@ -442,261 +328,294 @@ export async function ensureBillingPlanGrantsEnrollmentSynced(
       isRealmAdmin: true,
     })
 
-    const activeBindings = await trx
-      .selectFrom('billing_plan_assignments as bpa')
-      .innerJoin('billing_plans as bpl', 'bpl.plan_id', 'bpa.plan_id')
-      .select([
-        'bpa.assignment_id',
-        'bpa.window_start',
-        'bpa.window_end',
-        'bpl.plan_code',
-        sql`bpl.metadata`.as('plan_metadata'),
-      ])
-      .where('bpa.billing_account_id', '=', billingAccountId)
-      .where('bpa.status', '=', 'active')
-      .where((eb) =>
-        eb.and([
-          eb('bpa.window_start', '<=', now),
-          eb.or([eb('bpa.window_end', '>', now), eb('bpa.window_end', 'is', null)]),
-        ]),
-      )
-      .where('bpl.active', '=', true)
+    const billingUsers = await trx
+      .selectFrom('billing_users')
+      .select(['billing_user_id', 'metadata'])
+      .where('billing_account_id', '=', billingAccountId)
+      .$if(Boolean(targetBillingUserId), (qb) => qb.where('billing_user_id', '=', targetBillingUserId as string))
+      .where('status', '=', 'active')
+      .forUpdate()
       .execute()
-
-    const desiredTemplates: Array<{
-      billingPlanAssignmentId: string
-      billingPlanCode: string
-      templateKey: string | null
-      templateHash: string
-      templateMeta: unknown | null
-      grantProgramCode: string
-      windowStart: Date
-      windowEnd: Date | null
-      override: GrantBindingOverride | null
-      effect: 'allow' | 'deny'
-    }> = []
-
-    for (const b of activeBindings) {
-      const planMeta = (b.plan_metadata as Record<string, unknown> | null) ?? {}
-      const grantsRaw = (planMeta as Record<string, unknown>).grants
-      const grants = Array.isArray(grantsRaw)
-        ? (grantsRaw as unknown[])
-        : grantsRaw
-            ? [grantsRaw]
-            : []
-      for (const raw of grants) {
-        if (!raw || typeof raw !== 'object') continue
-        const override = normalizeGrantBindingOverride(raw)
-        const grantProgramCode =
-          override?.programCode ||
-          String(
-            (raw as Record<string, unknown>).grant_program_code ??
-              (raw as Record<string, unknown>).program_code ??
-              (raw as Record<string, unknown>).programCode ??
-              '',
-          ).trim()
-        if (!grantProgramCode) continue
-        const effect = ((raw as Record<string, unknown>).effect ?? 'allow') as 'allow' | 'deny'
-        const bindingWindowEnd = (b.window_end as Date | null) ?? null
-        const windowOverrideEnd =
-          override?.windowRelativeSecondsOverride && override.windowRelativeSecondsOverride > 0
-            ? new Date((b.window_start as Date).getTime() + override.windowRelativeSecondsOverride * 1000)
-            : bindingWindowEnd
-
-        const templateKeyRaw = (raw as Record<string, unknown>).template_key ?? (raw as Record<string, unknown>).templateKey
-        const templateKey = typeof templateKeyRaw === 'string' && templateKeyRaw.trim().length > 0 ? templateKeyRaw.trim() : null
-
-        const normalizedOverrideForTemplate: GrantBindingOverride =
-          override ?? ({ programCode: grantProgramCode } as GrantBindingOverride)
-        const templateHash = sha256Base64Url(stableStringify({
-          grant_program_code: grantProgramCode,
-          effect,
-          override: normalizedOverrideForTemplate,
-        }))
-
-        const templateMeta = ((raw as Record<string, unknown>).template_meta ?? (raw as Record<string, unknown>).templateMeta ?? null) as unknown
-
-        desiredTemplates.push({
-          billingPlanAssignmentId: String(b.assignment_id),
-          billingPlanCode: String(b.plan_code),
-          templateKey,
-          templateHash,
-          templateMeta,
-          grantProgramCode,
-          windowStart: b.window_start as Date,
-          windowEnd: windowOverrideEnd,
-          override,
-          effect,
-        })
-      }
-    }
-
-    const desiredForFingerprint = desiredTemplates
-      .slice()
-      .sort((a, b) => {
-        const aId = a.templateKey ? `key:${a.templateKey}` : `hash:${a.templateHash}`
-        const bId = b.templateKey ? `key:${b.templateKey}` : `hash:${b.templateHash}`
-        return a.billingPlanAssignmentId.localeCompare(b.billingPlanAssignmentId)
-          || aId.localeCompare(bId)
-          || a.grantProgramCode.localeCompare(b.grantProgramCode)
-      })
-      .map((d) => ({
-        billing_plan_assignment_id: d.billingPlanAssignmentId,
-        billing_plan_code: d.billingPlanCode,
-        template_key: d.templateKey,
-        template_hash: d.templateHash,
-        grant_program_code: d.grantProgramCode,
-        effect: d.effect,
-        window_start: d.windowStart.toISOString(),
-        window_end: d.windowEnd ? d.windowEnd.toISOString() : null,
-        override: d.override,
-      }))
-
-    const targetFingerprint = sha256Base64Url(stableStringify(desiredForFingerprint))
-
-    const accountMetadata = ((account.metadata ?? {}) as Record<string, unknown>) ?? {}
-    const grantsSwitch = readGrantsSwitchMetadata(accountMetadata)
-    const appliedFingerprint = grantsSwitch.applied_fingerprint ?? ''
-
-    if (appliedFingerprint === targetFingerprint && grantsSwitch.dirty !== true) {
+    if (billingUsers.length === 0) {
       return
     }
 
-    const programCodes = Array.from(new Set(desiredTemplates.map((d) => d.grantProgramCode)))
-    const grantPrograms = programCodes.length > 0
-      ? await trx
-          .selectFrom('grant_programs')
-          .select(['program_id', 'program_code'])
-          .where('realm_id', '=', account.realm_id)
-          .where('active', '=', true)
-          .where('program_code', 'in', programCodes)
-          .execute()
-      : []
-    const programIdByCode = new Map(grantPrograms.map((gp) => [String(gp.program_code), String(gp.program_id)]))
-
-    const desiredRefs = new Set<string>()
-    const desiredEnsures: Array<{
-      programId: string
-      sourceRef: string
-      billingPlanAssignmentId: string
-      billingPlanCode: string
-      templateId: string
-      templateKey: string | null
-      templateHash: string
-      templateMeta: unknown | null
-      grantProgramCode: string
-      windowStart: Date
-      windowEnd: Date | null
-      override: GrantBindingOverride | null
-    }> = []
-
-    for (const t of desiredTemplates) {
-      if (t.effect === 'deny') continue
-      const programId = programIdByCode.get(t.grantProgramCode)
-      if (!programId) continue
-      const templateId = t.templateKey ? `key:${t.templateKey}` : `hash:${t.templateHash}`
-      const sourceRef = `bpa:${t.billingPlanAssignmentId}:tpl:${templateId}`
-      desiredRefs.add(sourceRef)
-      desiredEnsures.push({
-        programId,
-        sourceRef,
-        billingPlanAssignmentId: t.billingPlanAssignmentId,
-        billingPlanCode: t.billingPlanCode,
-        templateId,
-        templateKey: t.templateKey,
-        templateHash: t.templateHash,
-        templateMeta: t.templateMeta,
-        grantProgramCode: t.grantProgramCode,
-        windowStart: t.windowStart,
-        windowEnd: t.windowEnd,
-        override: t.override,
-      })
-    }
-
-    const existing = await trx
-      .selectFrom('grant_assignments')
-      .select(['assignment_id', 'source_ref'])
-      .where('billing_account_id', '=', billingAccountId)
-      .where('source_kind', '=', 'billing_plan_assignment')
-      .execute()
-
-    const cancelIds = existing
-      .filter((row) => !desiredRefs.has(String(row.source_ref)))
-      .map((row) => String(row.assignment_id))
-
-    if (cancelIds.length > 0) {
-      await trx
-        .updateTable('grant_assignments')
-        .set({
-          status: 'canceled',
-          window_end: sql`case
-            when grant_assignments.window_end is null then ${now}
-            when grant_assignments.window_end > ${now} then ${now}
-            else grant_assignments.window_end
-          end`,
-          updated_at: now,
-        })
-        .where('billing_account_id', '=', billingAccountId)
-        .where('source_kind', '=', 'billing_plan_assignment')
-        .where('assignment_id', 'in', cancelIds)
+    for (const user of billingUsers) {
+      const billingUserId = String(user.billing_user_id)
+      const activeBindings = await trx
+        .selectFrom('billing_plan_assignments as bpa')
+        .innerJoin('billing_plans as bpl', 'bpl.plan_id', 'bpa.plan_id')
+        .select([
+          'bpa.assignment_id',
+          'bpa.window_start',
+          'bpa.window_end',
+          'bpl.plan_code',
+          sql`bpl.metadata`.as('plan_metadata'),
+        ])
+        .where('bpa.billing_account_id', '=', billingAccountId)
+        .where((eb) =>
+          eb.or([
+            eb('bpa.assignment_scope', '=', 'account'),
+            eb.and([eb('bpa.assignment_scope', '=', 'user'), eb('bpa.billing_user_id', '=', billingUserId)]),
+          ]),
+        )
+        .where('bpa.status', '=', 'active')
+        .where((eb) =>
+          eb.and([
+            eb('bpa.window_start', '<=', now),
+            eb.or([eb('bpa.window_end', '>', now), eb('bpa.window_end', 'is', null)]),
+          ]),
+        )
+        .where('bpl.active', '=', true)
         .execute()
-    }
 
-    for (const d of desiredEnsures) {
-      const normalizedOverride: GrantBindingOverride | null =
-        d.override ??
-        ({
-          programCode: d.grantProgramCode,
-        } as GrantBindingOverride)
+      const desiredTemplates: Array<{
+        billingPlanAssignmentId: string
+        billingPlanCode: string
+        templateKey: string | null
+        templateHash: string
+        templateMeta: unknown | null
+        grantProgramCode: string
+        windowStart: Date
+        windowEnd: Date | null
+        override: GrantBindingOverride | null
+        effect: 'allow' | 'deny'
+      }> = []
 
-      await ensureGrantAssignment(trx, {
-        billingAccountId,
-        programId: d.programId,
-        billingPlanAssignmentId: d.billingPlanAssignmentId,
-        sourceKind: 'billing_plan_assignment',
-        sourceRef: d.sourceRef,
-        windowStart: d.windowStart,
-        windowEnd: d.windowEnd,
-        metadata: {
+      for (const b of activeBindings) {
+        const planMeta = (b.plan_metadata as Record<string, unknown> | null) ?? {}
+        const grantsRaw = (planMeta as Record<string, unknown>).grants
+        const grants = Array.isArray(grantsRaw)
+          ? (grantsRaw as unknown[])
+          : grantsRaw
+              ? [grantsRaw]
+              : []
+        for (const raw of grants) {
+          if (!raw || typeof raw !== 'object') continue
+          const override = normalizeGrantBindingOverride(raw)
+          const grantProgramCode =
+            override?.programCode ||
+            String(
+              (raw as Record<string, unknown>).grant_program_code ??
+                (raw as Record<string, unknown>).program_code ??
+                (raw as Record<string, unknown>).programCode ??
+                '',
+            ).trim()
+          if (!grantProgramCode) continue
+          const effect = ((raw as Record<string, unknown>).effect ?? 'allow') as 'allow' | 'deny'
+          const bindingWindowEnd = (b.window_end as Date | null) ?? null
+          const windowOverrideEnd =
+            override?.windowRelativeSecondsOverride && override.windowRelativeSecondsOverride > 0
+              ? new Date((b.window_start as Date).getTime() + override.windowRelativeSecondsOverride * 1000)
+              : bindingWindowEnd
+
+          const templateKeyRaw = (raw as Record<string, unknown>).template_key ?? (raw as Record<string, unknown>).templateKey
+          const templateKey = typeof templateKeyRaw === 'string' && templateKeyRaw.trim().length > 0 ? templateKeyRaw.trim() : null
+
+          const normalizedOverrideForTemplate: GrantBindingOverride =
+            override ?? ({ programCode: grantProgramCode } as GrantBindingOverride)
+          const templateHash = sha256Base64Url(stableStringify({
+            grant_program_code: grantProgramCode,
+            effect,
+            override: normalizedOverrideForTemplate,
+          }))
+
+          const templateMeta = ((raw as Record<string, unknown>).template_meta ?? (raw as Record<string, unknown>).templateMeta ?? null) as unknown
+
+          desiredTemplates.push({
+            billingPlanAssignmentId: String(b.assignment_id),
+            billingPlanCode: String(b.plan_code),
+            templateKey,
+            templateHash,
+            templateMeta,
+            grantProgramCode,
+            windowStart: b.window_start as Date,
+            windowEnd: windowOverrideEnd,
+            override,
+            effect,
+          })
+        }
+      }
+
+      const desiredForFingerprint = desiredTemplates
+        .slice()
+        .sort((a, b) => {
+          const aId = a.templateKey ? `key:${a.templateKey}` : `hash:${a.templateHash}`
+          const bId = b.templateKey ? `key:${b.templateKey}` : `hash:${b.templateHash}`
+          return a.billingPlanAssignmentId.localeCompare(b.billingPlanAssignmentId)
+            || aId.localeCompare(bId)
+            || a.grantProgramCode.localeCompare(b.grantProgramCode)
+        })
+        .map((d) => ({
           billing_plan_assignment_id: d.billingPlanAssignmentId,
           billing_plan_code: d.billingPlanCode,
-          grant_template: {
-            id: d.templateId,
-            ...(d.templateKey ? { key: d.templateKey } : {}),
-            hash: d.templateHash,
-            ...(d.templateMeta !== null && d.templateMeta !== undefined ? { meta: d.templateMeta } : {}),
+          template_key: d.templateKey,
+          template_hash: d.templateHash,
+          grant_program_code: d.grantProgramCode,
+          effect: d.effect,
+          window_start: d.windowStart.toISOString(),
+          window_end: d.windowEnd ? d.windowEnd.toISOString() : null,
+          override: d.override,
+        }))
+
+      const targetFingerprint = sha256Base64Url(stableStringify(desiredForFingerprint))
+      const userMetadata = ((user.metadata ?? {}) as Record<string, unknown>) ?? {}
+      const grantsSwitch = readGrantsSwitchMetadata(userMetadata)
+      const appliedFingerprint = grantsSwitch.applied_fingerprint ?? ''
+
+      if (appliedFingerprint === targetFingerprint && grantsSwitch.dirty !== true) {
+        continue
+      }
+
+      const programCodes = Array.from(new Set(desiredTemplates.map((d) => d.grantProgramCode)))
+      const grantPrograms = programCodes.length > 0
+        ? await trx
+            .selectFrom('grant_programs')
+            .select(['program_id', 'program_code'])
+            .where('realm_id', '=', account.realm_id)
+            .where('active', '=', true)
+            .where('program_code', 'in', programCodes)
+            .execute()
+        : []
+      const programIdByCode = new Map(grantPrograms.map((gp) => [String(gp.program_code), String(gp.program_id)]))
+
+      const desiredRefs = new Set<string>()
+      const desiredEnsures: Array<{
+        programId: string
+        sourceRef: string
+        billingPlanAssignmentId: string
+        billingPlanCode: string
+        templateId: string
+        templateKey: string | null
+        templateHash: string
+        templateMeta: unknown | null
+        grantProgramCode: string
+        windowStart: Date
+        windowEnd: Date | null
+        override: GrantBindingOverride | null
+      }> = []
+
+      for (const t of desiredTemplates) {
+        if (t.effect === 'deny') continue
+        const programId = programIdByCode.get(t.grantProgramCode)
+        if (!programId) continue
+        const templateId = t.templateKey ? `key:${t.templateKey}` : `hash:${t.templateHash}`
+        const sourceRef = `bpa:${t.billingPlanAssignmentId}:tpl:${templateId}`
+        desiredRefs.add(sourceRef)
+        desiredEnsures.push({
+          programId,
+          sourceRef,
+          billingPlanAssignmentId: t.billingPlanAssignmentId,
+          billingPlanCode: t.billingPlanCode,
+          templateId,
+          templateKey: t.templateKey,
+          templateHash: t.templateHash,
+          templateMeta: t.templateMeta,
+          grantProgramCode: t.grantProgramCode,
+          windowStart: t.windowStart,
+          windowEnd: t.windowEnd,
+          override: t.override,
+        })
+      }
+
+      const existing = await trx
+        .selectFrom('grant_assignments')
+        .select(['assignment_id', 'source_ref'])
+        .where('billing_account_id', '=', billingAccountId)
+        .where('billing_user_id', '=', billingUserId)
+        .where('source_kind', '=', 'billing_plan_assignment')
+        .execute()
+
+      const cancelIds = existing
+        .filter((row) => !desiredRefs.has(String(row.source_ref)))
+        .map((row) => String(row.assignment_id))
+
+      if (cancelIds.length > 0) {
+        await trx
+          .updateTable('grant_assignments')
+          .set({
+            status: 'canceled',
+            window_end: sql`case
+              when grant_assignments.window_end is null then ${now}
+              when grant_assignments.window_end > ${now} then ${now}
+              else grant_assignments.window_end
+            end`,
+            updated_at: now,
+          })
+          .where('billing_account_id', '=', billingAccountId)
+          .where('billing_user_id', '=', billingUserId)
+          .where('source_kind', '=', 'billing_plan_assignment')
+          .where('assignment_id', 'in', cancelIds)
+          .execute()
+      }
+
+      for (const d of desiredEnsures) {
+        const normalizedOverride: GrantBindingOverride | null =
+          d.override ??
+          ({
+            programCode: d.grantProgramCode,
+          } as GrantBindingOverride)
+
+        await ensureGrantAssignment(trx, {
+          billingUserId,
+          billingAccountId,
+          programId: d.programId,
+          billingPlanAssignmentId: d.billingPlanAssignmentId,
+          sourceKind: 'billing_plan_assignment',
+          sourceRef: d.sourceRef,
+          windowStart: d.windowStart,
+          windowEnd: d.windowEnd,
+          metadata: {
+            billing_plan_assignment_id: d.billingPlanAssignmentId,
+            billing_plan_code: d.billingPlanCode,
+            grant_template: {
+              id: d.templateId,
+              ...(d.templateKey ? { key: d.templateKey } : {}),
+              hash: d.templateHash,
+              ...(d.templateMeta !== null && d.templateMeta !== undefined ? { meta: d.templateMeta } : {}),
+            },
+            ...(normalizedOverride?.metadata ?? {}),
+            ...(normalizedOverride ? { grants: [normalizedOverride] } : {}),
           },
-          ...(normalizedOverride?.metadata ?? {}),
-          ...(normalizedOverride ? { grants: [normalizedOverride] } : {}),
-        },
-        decidedAt: now,
+          decidedAt: now,
+        })
+      }
+
+      const finalMeta = writeGrantsSwitchMetadata(userMetadata, {
+        applied_fingerprint: targetFingerprint,
+        applied_at: now.toISOString(),
+        target_fingerprint: targetFingerprint,
+        dirty: false,
       })
+
+      await trx
+        .updateTable('billing_users')
+        .set({ metadata: finalMeta })
+        .where('billing_user_id', '=', billingUserId)
+        .execute()
     }
-
-    const finalMeta = writeGrantsSwitchMetadata(accountMetadata, {
-      applied_fingerprint: targetFingerprint,
-      applied_at: now.toISOString(),
-      target_fingerprint: targetFingerprint,
-      dirty: false,
-    })
-
-    await trx
-      .updateTable('billing_accounts')
-      .set({ metadata: finalMeta })
-      .where('billing_account_id', '=', billingAccountId)
-      .execute()
   }
 
   await runInTransaction(dbOrTrx, run)
 }
 
-export async function issueGrantsForAccount(dbOrTrx: DbOrTrx, billingAccountId: string): Promise<void> {
+export async function ensureBillingPlanGrantsEnrollmentSyncedForUser(
+  dbOrTrx: DbOrTrx,
+  billingAccountId: string,
+  billingUserId: string,
+  now: Date = new Date(),
+): Promise<void> {
+  await ensureBillingPlanGrantsEnrollmentSynced(dbOrTrx, billingAccountId, now, billingUserId)
+}
+
+export async function issueGrantsForAccount(dbOrTrx: DbOrTrx, billingAccountId: string, targetBillingUserId?: string): Promise<void> {
   const now = new Date()
   const assignments = await dbOrTrx
     .selectFrom('grant_assignments as ga')
     .innerJoin('grant_programs as gp', 'gp.program_id', 'ga.program_id')
     .select([
       'ga.assignment_id',
+      'ga.billing_user_id',
       'ga.billing_account_id',
       'ga.program_id',
       'ga.billing_plan_assignment_id',
@@ -732,6 +651,7 @@ export async function issueGrantsForAccount(dbOrTrx: DbOrTrx, billingAccountId: 
       'gp.eligibility_payload as gp_eligibility_payload',
     ])
     .where('ga.billing_account_id', '=', billingAccountId)
+    .$if(Boolean(targetBillingUserId), (qb) => qb.where('ga.billing_user_id', '=', targetBillingUserId as string))
     .where('ga.status', '=', 'active')
     .where('ga.source_kind', '=', 'billing_plan_assignment')
     .where('ga.window_start', '<=', now)
@@ -781,6 +701,7 @@ export async function issueGrantsForAccount(dbOrTrx: DbOrTrx, billingAccountId: 
 
     const assignment: GrantAssignmentRow = {
       assignment_id: String(row.assignment_id),
+      billing_user_id: String(row.billing_user_id),
       billing_account_id: String(row.billing_account_id),
       program_id: String(row.program_id),
       billing_plan_assignment_id: row.billing_plan_assignment_id ? String(row.billing_plan_assignment_id) : null,
@@ -800,6 +721,7 @@ export async function issueGrantsForAccount(dbOrTrx: DbOrTrx, billingAccountId: 
 
     await issueGrantForAssignment(dbOrTrx, {
       realmId: String((program as unknown as { realm_id: string }).realm_id),
+      billingUserId: String(row.billing_user_id),
       billingAccountId,
       program,
       assignment,
@@ -813,4 +735,12 @@ export async function issueGrantsForAccount(dbOrTrx: DbOrTrx, billingAccountId: 
       isRealmAdmin: true,
     })
   }
+}
+
+export async function issueGrantsForBillingUser(
+  dbOrTrx: DbOrTrx,
+  billingAccountId: string,
+  billingUserId: string,
+): Promise<void> {
+  await issueGrantsForAccount(dbOrTrx, billingAccountId, billingUserId)
 }

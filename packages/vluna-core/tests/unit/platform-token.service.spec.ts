@@ -24,6 +24,7 @@ describe('PlatformTokenService', { tags: ['unit'] }, () => {
       principalId: 'user_123',
       userId: 'user_123',
       billingAccountId: 'ba_123',
+      billingUserId: 'bu_123',
       ttlSeconds: 300,
       platformScopes: ['checkout', 'checkout'], // dedupe
       billingScopes: ['billing:read', 'billing:write'],
@@ -36,6 +37,7 @@ describe('PlatformTokenService', { tags: ['unit'] }, () => {
     expect(res.expiresIn).toBe(300)
     expect(res.claims.realm_id).toBe('realm_test')
     expect(res.claims.billing_account_id).toBe('ba_123')
+    expect(res.claims.billing_user_id).toBe('bu_123')
     expect(res.claims.plt_scopes).toEqual(['checkout'])
     expect(res.claims.plt_traits).toMatchObject({ email: 'user@example.com' })
     expect(res.claims.ib).toBe('svc_test')
@@ -44,6 +46,7 @@ describe('PlatformTokenService', { tags: ['unit'] }, () => {
     const verified = await tokenService.verify(res.accessToken, { audience: 'test-audience' })
     expect(verified.realm_id).toBe('realm_test')
     expect(verified.billing_account_id).toBe('ba_123')
+    expect(verified.billing_user_id).toBe('bu_123')
     expect(verified.plt_scopes).toEqual(['checkout'])
     expect(verified.tu).toBe('plt')
   })
@@ -57,6 +60,7 @@ describe('PlatformTokenService', { tags: ['unit'] }, () => {
       principalId: 'u',
       userId: 'u',
       billingAccountId: 'ba',
+      billingUserId: 'bu',
       ttlSeconds: 10, // below min 60
       platformScopes: [],
       billingScopes: [],
@@ -68,6 +72,7 @@ describe('PlatformTokenService', { tags: ['unit'] }, () => {
       principalId: 'u',
       userId: 'u',
       billingAccountId: 'ba',
+      billingUserId: 'bu',
       ttlSeconds: 10_000, // above max 3600
       platformScopes: [],
       billingScopes: [],
@@ -79,6 +84,7 @@ describe('PlatformTokenService', { tags: ['unit'] }, () => {
       principalId: 'u',
       userId: 'u',
       billingAccountId: 'ba',
+      billingUserId: 'bu',
       // NaN → default 900
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       ttlSeconds: 'not-a-number' as any,
@@ -97,6 +103,7 @@ describe('PlatformTokenService', { tags: ['unit'] }, () => {
       principalId: 'p',
       userId: 'p',
       billingAccountId: 'ba',
+      billingUserId: 'bu',
       ttlSeconds: 300,
       platformScopes: [],
       billingScopes: [],

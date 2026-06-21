@@ -58,6 +58,7 @@ export type BudgetCommitResult = {
 
 export type EnsureBudgetParams = {
   realmId: string
+  billingUserId: string
   billingAccountId: string
   featureCode?: string | null
   now: Date
@@ -118,6 +119,7 @@ export class BudgetService {
     trx: Kysely<Database>,
     params: {
       realmId: string
+      billingUserId: string
       billingAccountId: string
       budgetId: string
       now: Date
@@ -130,7 +132,8 @@ export class BudgetService {
       SELECT b.budget_id, b.limit_xusd, b.reserved_xusd, b.consumed_xusd, b.status, b.window_start, b.window_end
       FROM budgets b
       JOIN billing_accounts ba ON ba.billing_account_id = b.billing_account_id
-      WHERE b.billing_account_id = ${params.billingAccountId}
+      WHERE b.billing_user_id = ${params.billingUserId}
+        AND b.billing_account_id = ${params.billingAccountId}
         AND b.budget_id = ${budgetId}
         AND b.status = 'active'
         AND (b.window_start IS NULL OR b.window_start <= ${params.now})
@@ -201,6 +204,7 @@ export class BudgetService {
     trx: Kysely<Database>,
     params: {
       realmId: string
+      billingUserId: string
       billingAccountId: string
       budgetId: string
       now: Date
@@ -214,7 +218,8 @@ export class BudgetService {
       SELECT b.budget_id, b.limit_xusd, b.reserved_xusd, b.consumed_xusd, b.status, b.window_start, b.window_end
       FROM budgets b
       JOIN billing_accounts ba ON ba.billing_account_id = b.billing_account_id
-      WHERE b.billing_account_id = ${params.billingAccountId}
+      WHERE b.billing_user_id = ${params.billingUserId}
+        AND b.billing_account_id = ${params.billingAccountId}
         AND b.budget_id = ${budgetId}
         AND b.status = 'active'
         AND (b.window_start IS NULL OR b.window_start <= ${params.now})
@@ -312,9 +317,10 @@ export class BudgetService {
       scopePayload = { scope: 'global' }
     }
 
-    await getOrCreateLedgerAccount(trx, params.billingAccountId, WALLET_LEDGER_CURRENCY)
+    await getOrCreateLedgerAccount(trx, params.billingUserId, params.billingAccountId, WALLET_LEDGER_CURRENCY)
 
     const grantBalances = await this.grantBalanceService.getAccountGrantBalances(trx, {
+      billingUserId: params.billingUserId,
       billingAccountId: params.billingAccountId,
       asOf: params.now,
     })
@@ -345,7 +351,8 @@ export class BudgetService {
              b.metadata
       FROM budgets b
       JOIN billing_accounts ba ON ba.billing_account_id = b.billing_account_id
-      WHERE b.billing_account_id = ${params.billingAccountId}
+      WHERE b.billing_user_id = ${params.billingUserId}
+        AND b.billing_account_id = ${params.billingAccountId}
         AND b.status = 'active'
         AND (b.window_start IS NULL OR b.window_start <= ${params.now})
         AND (b.window_end IS NULL OR b.window_end > ${params.now})
@@ -398,6 +405,7 @@ export class BudgetService {
     const inserted = await trx
       .insertInto('budgets')
       .values({
+        billing_user_id: params.billingUserId,
         billing_account_id: params.billingAccountId,
         status: 'active',
         scope_kind: scopeKind,
@@ -425,7 +433,7 @@ export class BudgetService {
 
   async previewBudgetLimit(
     trx: Kysely<Database>,
-    params: { realmId: string; billingAccountId: string; budgetId: string; now: Date },
+    params: { realmId: string; billingUserId: string; billingAccountId: string; budgetId: string; now: Date },
   ): Promise<BudgetLimitSnapshot> {
     const budgetId = normalizeBudgetId(params.budgetId)
 
@@ -440,6 +448,7 @@ export class BudgetService {
       FROM budgets b
       JOIN billing_accounts ba ON ba.billing_account_id = b.billing_account_id
       WHERE b.budget_id = ${budgetId}
+        AND b.billing_user_id = ${params.billingUserId}
         AND b.billing_account_id = ${params.billingAccountId}
         AND ba.realm_id = ${params.realmId}
         AND b.status = 'active'
@@ -476,7 +485,7 @@ export class BudgetService {
 
   async updateBudgetUsage(
     trx: Kysely<Database>,
-    params: { realmId: string; billingAccountId: string; budgetId: string; consumeAmountXusd: bigint; now: Date },
+    params: { realmId: string; billingUserId: string; billingAccountId: string; budgetId: string; consumeAmountXusd: bigint; now: Date },
   ): Promise<BudgetUsageUpdate> {
     const budgetIdForUpdate = normalizeBudgetId(params.budgetId)
 
@@ -491,6 +500,7 @@ export class BudgetService {
       FROM budgets b
       JOIN billing_accounts ba ON ba.billing_account_id = b.billing_account_id
       WHERE b.budget_id = ${budgetIdForUpdate}
+        AND b.billing_user_id = ${params.billingUserId}
         AND b.billing_account_id = ${params.billingAccountId}
         AND ba.realm_id = ${params.realmId}
         AND b.status = 'active'
@@ -546,6 +556,7 @@ export class BudgetService {
     trx: Kysely<Database>,
     params: {
       realmId: string
+      billingUserId: string
       billingAccountId: string
       budgetId: string
       needAmountXusd: bigint
@@ -573,7 +584,8 @@ export class BudgetService {
              b.hwm_xusd
       FROM budgets b
       JOIN billing_accounts ba ON ba.billing_account_id = b.billing_account_id
-      WHERE b.billing_account_id = ${params.billingAccountId}
+      WHERE b.billing_user_id = ${params.billingUserId}
+        AND b.billing_account_id = ${params.billingAccountId}
         AND b.budget_id = ${budgetId}
         AND ba.realm_id = ${params.realmId}
       FOR UPDATE
@@ -628,6 +640,7 @@ export class BudgetService {
       computation,
       realmId: params.realmId,
       billingAccountId: params.billingAccountId,
+      billingUserId: params.billingUserId,
       now: params.now,
       idempotencyKey: params.idempotencyKey,
     })
@@ -687,6 +700,7 @@ export class BudgetService {
       row: BudgetWaterlineRow
       computation: BudgetWaterlineComputation
       realmId: string
+      billingUserId: string
       billingAccountId: string
       now: Date
       idempotencyKey?: string
@@ -720,6 +734,7 @@ export class BudgetService {
       // }
 
       await appendLedgerEntry(trx, {
+        billingUserId: params.billingUserId,
         billingAccountId: params.billingAccountId,
         currencyCode: WALLET_LEDGER_CURRENCY,
         amountXusd: -appliedRefill,

@@ -41,7 +41,7 @@ function makeGateService(opts: {
 
 function makeReq(query: Record<string, unknown> = {}): AppRequest {
   return {
-    ctx: { db: {} as never, realmId: 'r1', billingAccountId: 'ba1' },
+    ctx: { db: {} as never, realmId: 'r1', billingAccountId: 'ba1', billingUserId: 'bu1' },
     query,
   } as unknown as AppRequest
 }

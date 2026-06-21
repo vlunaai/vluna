@@ -7,6 +7,7 @@ import type { AppRequest } from '../../../types/app-request.js'
 import type { Database } from '../../../types/database.js'
 import { FeatureService, type FeatureMeterInput } from './feature.service.js'
 import { DomainError } from '../../../utils/domain-errors.js'
+import { invalidateGateRuntimeCaches } from '../../gate/services/quota.service.js'
 
 type Feature = BillingComponents['schemas']['Feature']
 type FeatureList = BillingComponents['schemas']['FeatureList']
@@ -379,6 +380,7 @@ export class FeaturesManagementService {
     }
 
     const feature = await this.getFeature(req, result.featureId)
+    invalidateGateRuntimeCaches()
     return { created: result.featureChange === 'created', feature }
   }
 
@@ -505,6 +507,7 @@ export class FeaturesManagementService {
           meterCodes: deleteMeterCodes,
         })
       }
+      invalidateGateRuntimeCaches()
       return this.getFeature(req, id)
     }
 
@@ -537,6 +540,7 @@ export class FeaturesManagementService {
         meterCodes: deleteMeterCodes,
       })
     }
+    invalidateGateRuntimeCaches()
     return this.getFeature(req, id)
   }
 
@@ -572,6 +576,7 @@ export class FeaturesManagementService {
         .where('realm_id', '=', realmId)
         .where('feature_id', '=', id)
         .executeTakeFirst()
+      invalidateGateRuntimeCaches()
       return { deleted: false, soft_deleted: true }
     }
 
@@ -586,6 +591,7 @@ export class FeaturesManagementService {
       throw new HttpException({ code: 'NOT_FOUND', message: 'feature to delete not found' }, 404)
     }
 
+    invalidateGateRuntimeCaches()
     return { deleted: true, soft_deleted: false }
   }
 

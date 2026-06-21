@@ -44,6 +44,8 @@ export async function listRealmProducts(
     ])
     .where('p.realm_id', '=', params.realmId)
     .where('p.status', '=', 'active')
+    .orderBy('p.display_priority')
+    .orderBy('p.name')
     .orderBy('p.catalog_product_id')
     .limit(limit + 1)
 

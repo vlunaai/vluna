@@ -29,7 +29,7 @@ type PolicyRow = {
 }
 
 type FeatureRow = { realm_id: string; feature_code: string }
-type BillingAccountRow = { billing_account_id: string; realm_id: string; current_bundle_id: string | null }
+type BillingAccountRow = { billing_account_id: string; realm_id: string }
 
 type SelectState = {
   table: string
@@ -126,7 +126,7 @@ function makeFakeDb(): Kysely<Database> {
     },
   ]
   const features: FeatureRow[] = [{ realm_id: 'r1', feature_code: 'feat1' }]
-  const accounts: BillingAccountRow[] = [{ billing_account_id: 'ba1', realm_id: 'r1', current_bundle_id: null }]
+  const accounts: BillingAccountRow[] = [{ billing_account_id: 'ba1', realm_id: 'r1' }]
 
   return {
     selectFrom(table: string) {
@@ -140,10 +140,10 @@ function makeFakeDb(): Kysely<Database> {
 }
 
 describe('QuotaService.loadActivePolicyWindows bundle fallback', { tags: ['unit'] }, () => {
-  it('falls back to default bundle when account has no current_bundle_id', async () => {
+  it('falls back to default bundle when no user bundle is provided', async () => {
     const svc = new QuotaService()
     const db = makeFakeDb()
-    const windows = await svc.loadActivePolicyWindows(db, 'r1', 'ba1', new Date())
+    const windows = await svc.loadActivePolicyWindows(db, 'r1', 'ba1', 'bu1', new Date())
     expect(windows).toHaveLength(1)
     const win = windows[0]
     expect(win.featureCode).toBe('feat1')

@@ -8,6 +8,7 @@ import { prepareDbTestContext } from '../utils/db-setup.js'
 const FIXTURE = path.resolve(__dirname, 'fixtures/grant_cadence_billing_period.sql')
 const realmId = 'realm-test'
 const billingAccountId = '11111111-1111-1111-1111-111111111111'
+const billingUserId = '22222222-2222-2222-2222-222222222222'
 
 describe('grant cadence=billing_period issuance (db)', { tags: ['db'] }, () => {
   let stop: () => Promise<void>
@@ -56,6 +57,10 @@ describe('grant cadence=billing_period issuance (db)', { tags: ['db'] }, () => {
       `insert into billing_accounts (billing_account_id, realm_id, billing_principal_id) values ($1, $2, $3)`,
       [billingAccountId, realmId, 'principal-1'],
     )
+    await seedClient.query(
+      `insert into billing_users (billing_user_id, realm_id, billing_account_id, business_user_id) values ($1, $2, $3, $4)`,
+      [billingUserId, realmId, billingAccountId, 'user-1'],
+    )
 
     await seedClient.query(
       `
@@ -77,10 +82,11 @@ describe('grant cadence=billing_period issuance (db)', { tags: ['db'] }, () => {
     await seedClient.query(
       `
       insert into grant_assignments (
-        billing_account_id, program_id, source_kind, source_ref, window_start, window_end, status, metadata
-      ) values ($1, $2, $3, $4, $5, $6, $7, $8::jsonb)
+        billing_user_id, billing_account_id, program_id, source_kind, source_ref, window_start, window_end, status, metadata
+      ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb)
       `,
       [
+        billingUserId,
         billingAccountId,
         programId,
         'ops.manual',
@@ -118,6 +124,7 @@ describe('grant cadence=billing_period issuance (db)', { tags: ['db'] }, () => {
 
         await issueGrantForAssignment(trx, {
           realmId,
+          billingUserId,
           billingAccountId,
           program,
           assignment,
@@ -182,6 +189,7 @@ describe('grant cadence=billing_period issuance (db)', { tags: ['db'] }, () => {
 
           await issueGrantForAssignment(trx, {
             realmId,
+            billingUserId,
             billingAccountId,
             program,
             assignment,
@@ -232,6 +240,7 @@ describe('grant cadence=billing_period issuance (db)', { tags: ['db'] }, () => {
 
         await issueGrantForAssignment(trx, {
           realmId,
+          billingUserId,
           billingAccountId,
           program,
           assignment,
@@ -242,6 +251,7 @@ describe('grant cadence=billing_period issuance (db)', { tags: ['db'] }, () => {
 
         await issueGrantForAssignment(trx, {
           realmId,
+          billingUserId,
           billingAccountId,
           program,
           assignment,

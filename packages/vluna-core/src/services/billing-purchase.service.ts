@@ -4,7 +4,6 @@ import { setRlsSession } from '../db/index.js'
 import {
   ensureBillingPlanAssignment,
   ensureBillingPlanGrantsEnrollmentSynced,
-  refreshBillingAccountState,
   issueGrantsForAccount,
 } from './billing-plan.service.js'
 import { BillingPeriodService } from './billing-period.service.js'
@@ -14,6 +13,10 @@ import {
   normalizeGrantBindingOverride,
 } from './grant-issuance.service.js'
 import type { GrantBindingOverride, GrantBindingSourceKind } from './grant-issuance.service.js'
+import {
+  resolveSeatLimitFromMetadata,
+  updateBillingAccountSeatLimit,
+} from './billing-user-provisioning.js'
 
 export type PriceQuantities = Map<string, { quantity: number }>
 
@@ -73,12 +76,6 @@ type GrantBindingPlan = {
   mapping: CatalogPriceMapping
   providerPriceId: string
   quantity: number
-}
-
-type GatingAssignment = {
-  catalogPriceId: string
-  bundle?: string
-  validRangeSource: string
 }
 
 type LedgerGrantContext = {
@@ -335,15 +332,25 @@ export async function syncSubscriptionSnapshot(
     subscriptionItemByCatalogId.set(String(row.catalog_price_id), String(row.subscription_item_id))
   }
 
+  const realmRow = await trx
+    .selectFrom('billing_accounts')
+    .select(['realm_id'])
+    .where('billing_account_id', '=', params.billingAccountId)
+    .executeTakeFirstOrThrow(() => new Error('billing account not found for subscription sync'))
+  const realmId = String(realmRow.realm_id)
+  const seatLimit = resolveSubscriptionSeatLimit(params.subscription, mappedItems, params.priceMappings)
+  if (seatLimit !== undefined) {
+    await updateBillingAccountSeatLimit(trx, {
+      realmId,
+      billingAccountId: params.billingAccountId,
+      seatLimit,
+      source: 'provider.subscription',
+    })
+  }
+
   // Pre-warm billing period instance so later settlement paths don't have to create it implicitly.
   // Billing periods are canonical natural months (UTC); subscription boundaries are recorded as source_period_*.
   if (params.subscription.status === 'trialing' || params.subscription.status === 'active' || params.subscription.status === 'past_due') {
-    const realmRow = await trx
-      .selectFrom('billing_accounts')
-      .select(['realm_id'])
-      .where('billing_account_id', '=', params.billingAccountId)
-      .executeTakeFirstOrThrow(() => new Error('billing account not found for subscription sync'))
-
     const now = new Date()
     const start = params.subscription.currentPeriodStart
     const end = params.subscription.currentPeriodEnd
@@ -357,13 +364,46 @@ export async function syncSubscriptionSnapshot(
 
     const svc = new BillingPeriodService()
     await svc.ensureBillingPeriodInstance(trx, {
-      realmId: String(realmRow.realm_id),
+      realmId,
       billingAccountId: params.billingAccountId,
       at,
     })
   }
 
   return { subscriptionId, subscriptionItemByCatalogId }
+}
+
+function resolveSubscriptionSeatLimit(
+  subscription: SubscriptionSnapshot,
+  mappedItems: Array<{ provider_price_id: string; catalog_price_id: string; quantity: number }>,
+  priceMappings: Map<string, CatalogPriceMapping>,
+): number | null | undefined {
+  const activeSubscription =
+    subscription.status === 'trialing' || subscription.status === 'active' || subscription.status === 'past_due'
+  let configured = false
+  let unlimited = false
+  let total = 0
+
+  for (const item of mappedItems) {
+    const mapping = priceMappings.get(item.provider_price_id)
+    if (!mapping) continue
+    const priceLimit = resolveSeatLimitFromMetadata(mapping.metadata, item.quantity)
+    const resolvedLimit =
+      priceLimit === undefined
+        ? resolveSeatLimitFromMetadata(mapping.product_metadata, item.quantity)
+        : priceLimit
+    if (resolvedLimit === undefined) continue
+    configured = true
+    if (resolvedLimit === null) {
+      unlimited = true
+      continue
+    }
+    total += resolvedLimit
+  }
+
+  if (!configured) return undefined
+  if (!activeSubscription) return 0
+  return unlimited ? null : total
 }
 
 async function processBillingPlanAssignments(
@@ -408,6 +448,9 @@ async function processBillingPlanAssignments(
 
   await setRlsSession(trx, { realmId: ctx.realmId, billingAccountId: ctx.billingAccountId, isRealmAdmin: true })
 
+  const billingUserIds = await loadActiveBillingUserIds(trx, ctx.billingAccountId)
+  if (billingUserIds.length === 0) return false
+
   const planCodes = Array.from(new Set(assignments.map((a) => a.planCode)))
   const plans = await trx
     .selectFrom('billing_plans')
@@ -417,35 +460,39 @@ async function processBillingPlanAssignments(
     .where('plan_code', 'in', planCodes)
     .execute()
   const planIdByCode = new Map(plans.map((p) => [p.plan_code, p.plan_id]))
-  for (const a of assignments) {
-    const planId = planIdByCode.get(a.planCode)
-    if (!planId) continue
-    if (a.sourceKind === 'provider.subscription_item' && !a.subscriptionItemId) {
-      console.warn('[billing.purchase] missing subscription_item_id for profile binding', {
+  for (const billingUserId of billingUserIds) {
+    for (const a of assignments) {
+      const planId = planIdByCode.get(a.planCode)
+      if (!planId) continue
+      if (a.sourceKind === 'provider.subscription_item' && !a.subscriptionItemId) {
+        console.warn('[billing.purchase] missing subscription_item_id for profile binding', {
+          billingAccountId: ctx.billingAccountId,
+          billingUserId,
+          subscriptionId: ctx.subscription.externalSubscriptionId,
+          providerPriceId: a.providerPriceId,
+          planCode: a.planCode,
+        })
+        continue
+      }
+      await ensureBillingPlanAssignment(trx, {
         billingAccountId: ctx.billingAccountId,
-        subscriptionId: ctx.subscription.externalSubscriptionId,
-        providerPriceId: a.providerPriceId,
-        planCode: a.planCode,
+        assignmentScope: 'user',
+        billingUserId,
+        planId: String(planId),
+        subscriptionItemId: a.subscriptionItemId,
+        sourceKind: a.sourceKind,
+        sourceRef: a.sourceRef,
+        windowStart: a.windowStart,
+        windowEnd: a.windowEnd,
+        metadata: {
+          provider: ctx.subscription.provider,
+          provider_price_id: a.providerPriceId,
+          provider_subscription_id: ctx.subscription.externalSubscriptionId,
+        },
       })
-      continue
     }
-    await ensureBillingPlanAssignment(trx, {
-      billingAccountId: ctx.billingAccountId,
-      planId: String(planId),
-      subscriptionItemId: a.subscriptionItemId,
-      sourceKind: a.sourceKind,
-      sourceRef: a.sourceRef,
-      windowStart: a.windowStart,
-      windowEnd: a.windowEnd,
-      metadata: {
-        provider: ctx.subscription.provider,
-        provider_price_id: a.providerPriceId,
-        provider_subscription_id: ctx.subscription.externalSubscriptionId,
-      },
-    })
   }
 
-  await refreshBillingAccountState(trx, ctx.billingAccountId)
   await ensureBillingPlanGrantsEnrollmentSynced(trx, ctx.billingAccountId)
   await issueGrantsForAccount(trx, ctx.billingAccountId)
   return true
@@ -480,6 +527,11 @@ async function processGrants(trx: Transaction<Database>, ctx: LedgerGrantContext
     billingAccountId: ctx.billingAccountId,
     isRealmAdmin: true,
   })
+
+  const billingUserIds = await loadActiveBillingUserIds(trx, ctx.billingAccountId)
+  if (billingUserIds.length === 0) {
+    return
+  }
 
   const uniqueProgramCodes = Array.from(new Set(plans.map((plan) => plan.override.programCode)))
   if (uniqueProgramCodes.length === 0) return
@@ -519,50 +571,67 @@ async function processGrants(trx: Transaction<Database>, ctx: LedgerGrantContext
       quantity: plan.quantity,
     }
 
-    const assignment = await ensureGrantAssignment(trx, {
-      billingAccountId: ctx.billingAccountId,
-      programId: program.program_id,
-      sourceKind,
-      sourceRef,
-      windowStart: bindingWindow.start,
-      windowEnd: bindingWindow.end,
-      metadata: bindingMetadata,
-      decidedAt: now,
-    })
+    for (const billingUserId of billingUserIds) {
+      const assignment = await ensureGrantAssignment(trx, {
+        billingUserId,
+        billingAccountId: ctx.billingAccountId,
+        programId: program.program_id,
+        sourceKind,
+        sourceRef,
+        windowStart: bindingWindow.start,
+        windowEnd: bindingWindow.end,
+        metadata: bindingMetadata,
+        decidedAt: now,
+      })
 
-    const grantMetadata: Record<string, unknown> = {
-      source: `${ctx.event.provider}.checkout`,
-      provider_event_id: ctx.event.eventId,
-      provider_session_id: ctx.event.session.id,
-      catalog_price_id: plan.mapping.catalog_price_id,
-      catalog_product_id: plan.mapping.catalog_product_id,
-      provider_price_id: plan.mapping.provider_price_id,
-      quantity: plan.quantity,
-    }
-
-    await issueGrantForAssignment(trx, {
-      realmId,
-      billingAccountId: ctx.billingAccountId,
-      program,
-      assignment,
-      override: plan.override,
-      quantity: plan.quantity,
-      sourceKind,
-      sourceRef,
-      metadata: grantMetadata,
-      idempotencyKey: ctx.event.idempotencyPrefix
-        ? `${ctx.event.idempotencyPrefix}:grant:${plan.override.programCode}`
-        : `${ctx.event.provider}:${ctx.event.eventId}:${assignment.assignment_id}:${plan.override.programCode}`,
-      now,
-      allocSeq: plan.override.allocSeqOverride,
-      ledgerLabels: {
-        origin: `${ctx.event.provider}.checkout`,
-        catalog_price_id: plan.mapping.catalog_price_id,
+      const grantMetadata: Record<string, unknown> = {
+        source: `${ctx.event.provider}.checkout`,
         provider_event_id: ctx.event.eventId,
-      },
-      isRealmAdmin: true,
-    })
+        provider_session_id: ctx.event.session.id,
+        catalog_price_id: plan.mapping.catalog_price_id,
+        catalog_product_id: plan.mapping.catalog_product_id,
+        provider_price_id: plan.mapping.provider_price_id,
+        quantity: plan.quantity,
+      }
+
+      await issueGrantForAssignment(trx, {
+        realmId,
+        billingUserId,
+        billingAccountId: ctx.billingAccountId,
+        program,
+        assignment,
+        override: plan.override,
+        quantity: plan.quantity,
+        sourceKind,
+        sourceRef,
+        metadata: grantMetadata,
+        idempotencyKey: ctx.event.idempotencyPrefix
+          ? `${ctx.event.idempotencyPrefix}:grant:${billingUserId}:${plan.override.programCode}`
+          : `${ctx.event.provider}:${ctx.event.eventId}:${billingUserId}:${assignment.assignment_id}:${plan.override.programCode}`,
+        now,
+        allocSeq: plan.override.allocSeqOverride,
+        ledgerLabels: {
+          origin: `${ctx.event.provider}.checkout`,
+          catalog_price_id: plan.mapping.catalog_price_id,
+          provider_event_id: ctx.event.eventId,
+        },
+        isRealmAdmin: true,
+      })
+    }
   }
+}
+
+async function loadActiveBillingUserIds(
+  trx: Transaction<Database>,
+  billingAccountId: string,
+): Promise<string[]> {
+  const rows = await trx
+    .selectFrom('billing_users')
+    .select(['billing_user_id'])
+    .where('billing_account_id', '=', billingAccountId)
+    .where('status', '=', 'active')
+    .execute()
+  return rows.map((row) => String(row.billing_user_id)).filter(Boolean)
 }
 
 function extractGrantBindingOverrides(metadata: Record<string, unknown> | null | undefined): GrantBindingOverride[] {
@@ -629,86 +698,4 @@ function buildBindingSourceRef(ctx: LedgerGrantContext, plan: GrantBindingPlan):
   const prefix = ctx.subscription ? `${ctx.event.provider}.subscription` : `${ctx.event.provider}.checkout`
   const baseId = ctx.subscription?.externalSubscriptionId ?? ctx.event.session.id
   return `${prefix}:${baseId}:${plan.mapping.catalog_price_id}:${plan.providerPriceId}:${plan.override.programCode}`
-}
-
-export async function processGateProvisioning(
-  trx: Transaction<Database>,
-  ctx: {
-    billingAccountId: string
-    realmId: string
-    priceQuantities: PriceQuantities
-    priceMappings: Map<string, CatalogPriceMapping>
-    subscription?: SubscriptionSnapshot | null
-  },
-): Promise<void> {
-  const realmId = ctx.realmId
-  if (!realmId) return
-
-  const gatingAssignments: GatingAssignment[] = []
-
-  for (const [providerPriceId, mapping] of ctx.priceMappings.entries()) {
-    const quantity = ctx.priceQuantities.get(providerPriceId)?.quantity ?? 0
-    if (quantity <= 0) continue
-    const gatingRaw = (mapping.metadata?.gating ?? null) as Record<string, unknown> | null
-    if (!gatingRaw || typeof gatingRaw !== 'object') continue
-
-    const gating = gatingRaw as Record<string, unknown>
-
-    const bundleOverrideRaw = (gating as Record<string, unknown>).bundle
-    const bundleOverride = typeof bundleOverrideRaw === 'string' ? bundleOverrideRaw.trim() : undefined
-    const bundle = bundleOverride && bundleOverride.length > 0 ? bundleOverride : undefined
-    const validRangeSource = ctx.subscription ? 'subscription' : 'one_time'
-
-    if (bundle) {
-      gatingAssignments.push({
-        catalogPriceId: mapping.catalog_price_id,
-        bundle,
-        validRangeSource,
-      })
-    }
-  }
-
-  if (gatingAssignments.length === 0) return
-
-  const bundleNames = new Set<string>()
-  for (const assignment of gatingAssignments) {
-    if (assignment.bundle) {
-      bundleNames.add(assignment.bundle.trim())
-    }
-  }
-
-  if (bundleNames.size === 0) {
-    return
-  }
-
-  await setRlsSession(trx, {
-    realmId,
-    billingAccountId: ctx.billingAccountId,
-    isRealmAdmin: true,
-  })
-
-  const bundleRows = await trx
-    .selectFrom('gate_policy_bundles')
-    .select(['bundle_id', 'bundle_key', 'status'])
-    .where('realm_id', '=', realmId)
-    .where('bundle_key', 'in', Array.from(bundleNames))
-    .where('status', '=', 'active')
-    .execute()
-
-  if (bundleRows.length === 0) {
-    console.warn('[billing.purchase] bundle missing for gating assignment; falling back to default bundle', {
-      realmId,
-      billingAccountId: ctx.billingAccountId,
-      bundleKeys: Array.from(bundleNames),
-    })
-    await refreshBillingAccountState(trx, ctx.billingAccountId)
-    return
-  }
-
-  const extraCandidates = Array.from(bundleRows).map((row) => ({
-    bundle_key: String(row.bundle_key),
-    priority: 0,
-  }))
-
-  await refreshBillingAccountState(trx, ctx.billingAccountId, extraCandidates)
 }

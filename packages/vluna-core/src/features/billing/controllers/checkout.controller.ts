@@ -7,7 +7,7 @@ import { IdempotencyInterceptor } from '../../../support/idempotency.interceptor
 import type { AppRequest } from '../../../types/app-request.js'
 import type { operations as BillingOps } from '../../../contracts/billing.js'
 import { JsonRequestBody, JsonResponse } from '../../../contracts/openapi-helpers.js'
-import { PrincipalBillingAccountGuard } from '../../../auth/guards/principal-billing-account.guard.js'
+import { BillingAccountGuard } from '../../../auth/guards/billing-account.guard.js'
 import { PrincipalGuard } from '../../../auth/guards/principal.guard.js'
 import { AuthRequiredGuard } from '../../../auth/guards/auth-required.guard.js'
 import { ServiceAuthGuard } from '../../../auth/guards/service-auth.guard.js'
@@ -22,7 +22,7 @@ type CreateCheckoutBody = JsonRequestBody<BillingOps, 'createCheckoutSession'>
 type CreateCheckout201 = JsonResponse<BillingOps, 'createCheckoutSession', 201>
 
 @Controller('checkout')
-@UseGuards(RealmGuard, TokenClaimsGuard, RealmMembershipGuard, PrincipalGuard, PrincipalBillingAccountGuard)
+@UseGuards(RealmGuard, TokenClaimsGuard, RealmMembershipGuard, PrincipalGuard, BillingAccountGuard)
 export class CheckoutPublicController {
   constructor(private readonly checkoutApi: CheckoutApiService) {}
 
@@ -43,7 +43,7 @@ export class CheckoutPublicController {
 }
 
 @Controller('checkout')
-@UseGuards(RealmGuard, AuthRequiredGuard, ServiceAuthGuard, TokenClaimsGuard, RealmMembershipGuard, ServiceAccountGuard, PrincipalGuard, PrincipalBillingAccountGuard)
+@UseGuards(RealmGuard, AuthRequiredGuard, ServiceAuthGuard, TokenClaimsGuard, RealmMembershipGuard, ServiceAccountGuard, PrincipalGuard, BillingAccountGuard)
 export class CheckoutServiceController {
   constructor(private readonly checkoutApi: CheckoutApiService) {}
 

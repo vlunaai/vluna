@@ -5,7 +5,7 @@ import type { AppRequest } from '../../../types/app-request.js'
 import type { operations as BillingOps } from '../../../contracts/billing.js'
 import { JsonResponse, QueryParams } from '../../../contracts/openapi-helpers.js'
 import { OptionalPrincipalGuard } from '../../../auth/guards/optional-principal.guard.js'
-import { OptionalPrincipalBillingAccountGuard } from '../../../auth/guards/optional-principal-billing-account.guard.js'
+import { OptionalBillingAccountGuard } from '../../../auth/guards/optional-billing-account.guard.js'
 import { AuthRequiredGuard } from '../../../auth/guards/auth-required.guard.js'
 import { ServiceAuthGuard } from '../../../auth/guards/service-auth.guard.js'
 import { ServiceAccountGuard } from '../../../auth/guards/service-account.guard.js'
@@ -23,7 +23,7 @@ type ListPricesQuery = QueryParams<BillingOps, 'listCatalogPrices'>
 type ListPrices200 = JsonResponse<BillingOps, 'listCatalogPrices', 200>
 
 @Controller('catalog')
-@UseGuards(RealmGuard, TokenClaimsGuard, RealmMembershipGuard, OptionalPrincipalGuard, OptionalPrincipalBillingAccountGuard)
+@UseGuards(RealmGuard, TokenClaimsGuard, RealmMembershipGuard, OptionalPrincipalGuard, OptionalBillingAccountGuard)
 export class CatalogPublicController {
   constructor(private readonly catalogApi: CatalogApiService) {}
 
@@ -49,7 +49,7 @@ export class CatalogPublicController {
 }
 
 @Controller('catalog')
-@UseGuards(RealmGuard, AuthRequiredGuard, ServiceAuthGuard, TokenClaimsGuard, RealmMembershipGuard, ServiceAccountGuard, OptionalPrincipalGuard, OptionalPrincipalBillingAccountGuard)
+@UseGuards(RealmGuard, AuthRequiredGuard, ServiceAuthGuard, TokenClaimsGuard, RealmMembershipGuard, ServiceAccountGuard, OptionalPrincipalGuard, OptionalBillingAccountGuard)
 export class CatalogServiceController {
   constructor(private readonly catalogApi: CatalogApiService) {}
 

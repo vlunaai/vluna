@@ -5,7 +5,7 @@ import { detectAuthScheme } from '../utils/auth-scheme.js'
 import { ensureBillingAccount } from '../../security/principal/billing-account.resolver.js'
 
 @Injectable()
-export class PrincipalBillingAccountGuard implements CanActivate {
+export class BillingAccountGuard implements CanActivate {
   async canActivate(context: ExecutionContext): Promise<boolean> {
     const req = context.switchToHttp().getRequest<AppRequest>()
     req.ctx = req.ctx || ({} as RequestContext)

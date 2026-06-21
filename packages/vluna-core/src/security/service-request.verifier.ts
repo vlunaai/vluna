@@ -13,7 +13,9 @@ export interface SignParams {
   contentType: string
   realmId: string
   principalId: string
-  billingAccountId: string
+  userId: string
+  billingAccountId?: string
+  billingUserId?: string
   idempotencyKey: string
   algorithm?: ServiceSignatureAlgorithm
   output?: 'base64' | 'buffer'
@@ -46,7 +48,7 @@ export type VerifyFailureCode =
   | 'signature_mismatch'
 
 export type VerifyServiceRequestResult =
-  | { ok: true; parsed: ParsedAuthHeader; canonical: string, verified: { realmId?: string; billingAccountId?: string; principalId?: string } }
+  | { ok: true; parsed: ParsedAuthHeader; canonical: string, verified: { realmId?: string; billingAccountId?: string; billingUserId?: string; principalId?: string; userId?: string } }
   | {
       ok: false
       code: VerifyFailureCode
@@ -112,7 +114,9 @@ export function verifyServiceRequest(params: {
   const contentType = getHeader(params.request.headers, 'content-type') || ''
   const realmId = getHeader(params.request.headers, 'x-realm-id') || ''
   const billingAccountId = getHeader(params.request.headers, 'x-billing-account-id') || ''
+  const billingUserId = getHeader(params.request.headers, 'x-billing-user-id') || ''
   const principalId = getHeader(params.request.headers, 'x-principal-id') || ''
+  const userId = getHeader(params.request.headers, 'x-user-id') || ''
   const idempotencyKey = getHeader(params.request.headers, 'idempotency-key') || ''
 
   const canonical = buildCanonicalString({
@@ -124,7 +128,9 @@ export function verifyServiceRequest(params: {
     contentType: contentType || '',
     realmId: realmId || '',
     billingAccountId: billingAccountId || '',
+    billingUserId: billingUserId || '',
     principalId: principalId || '',
+    userId: userId || '',
     idempotencyKey: idempotencyKey || '',
     algorithm: parsed.algorithm,
   })
@@ -140,7 +146,9 @@ export function verifyServiceRequest(params: {
     contentType: contentType || '',
     realmId: realmId || '',
     billingAccountId: billingAccountId || '',
+    billingUserId: billingUserId || '',
     principalId: principalId || '',
+    userId: userId || '',
     idempotencyKey: idempotencyKey || '',
     algorithm: parsed.algorithm,
     output: 'base64',
@@ -160,7 +168,18 @@ export function verifyServiceRequest(params: {
     }
   }
 
-  return { ok: true, parsed, canonical, verified: { realmId: realmId?.trim(), billingAccountId: billingAccountId?.trim(), principalId: principalId?.trim() } }
+  return {
+    ok: true,
+    parsed,
+    canonical,
+    verified: {
+      realmId: realmId?.trim(),
+      billingAccountId: billingAccountId?.trim(),
+      billingUserId: billingUserId?.trim(),
+      principalId: principalId?.trim(),
+      userId: userId?.trim(),
+    },
+  }
 }
 
 export function signServiceRequest(params: SignParams): string | Buffer {
@@ -183,8 +202,10 @@ export function buildCanonicalString(params: {
   contentDigest: string
   contentType: string
   realmId: string
-  billingAccountId: string
+  billingAccountId?: string
+  billingUserId?: string
   principalId: string
+  userId: string
   idempotencyKey: string
   algorithm?: ServiceSignatureAlgorithm
 }): string {
@@ -200,8 +221,10 @@ export function buildCanonicalString(params: {
     `content-digest:${params.contentDigest}`,
     `content-type:${params.contentType}`,
     `x-realm-id:${params.realmId}`,
-    `x-billing-account-id:${params.billingAccountId}`,
     `x-principal-id:${params.principalId}`,
+    `x-user-id:${params.userId}`,
+    `x-billing-account-id:${params.billingAccountId ?? ''}`,
+    `x-billing-user-id:${params.billingUserId ?? ''}`,
     `idempotency-key:${params.idempotencyKey}`,
   ].join('\n')
 }

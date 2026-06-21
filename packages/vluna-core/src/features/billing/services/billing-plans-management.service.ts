@@ -7,10 +7,10 @@ import type { AppRequest } from '../../../types/app-request.js'
 import type { Database } from '../../../types/database.js'
 import {
   ensureBillingPlanAssignment,
-  refreshBillingAccountState,
   upsertBillingPlan,
 } from '../../../services/billing-plan.service.js'
 import { allowCrossAccountAccess } from '../../../auth/utils/access.js'
+import { invalidateGateRuntimeCaches } from '../../gate/services/quota.service.js'
 
 type BillingPlan = BillingComponents['schemas']['BillingPlan']
 type BillingPlanList = BillingComponents['schemas']['BillingPlanList']
@@ -21,6 +21,7 @@ type BillingPlanAssignmentList = BillingComponents['schemas']['BillingPlanAssign
 
 type PlanKind = 'base' | 'addon' | 'promo'
 type EntitlementEffect = 'allow' | 'deny'
+type AssignmentScope = 'account' | 'user'
 type AssignmentStatus = 'active' | 'paused' | 'canceled' | 'expired'
 type AssignmentSourceKind =
   | 'signup.default'
@@ -69,6 +70,30 @@ function normalizeMetadata(value: unknown): Record<string, unknown> {
     throw new HttpException({ code: 'VALIDATION.INVALID_INPUT', message: 'metadata must be an object' }, 422)
   }
   return { ...(value as Record<string, unknown>) }
+}
+
+function normalizeAssignmentMetadata(value: unknown): Record<string, unknown> {
+  const metadata = normalizeMetadata(value)
+  if (Object.prototype.hasOwnProperty.call(metadata, 'gate_bundle_key')) {
+    throw new HttpException({
+      code: 'VALIDATION.INVALID_INPUT',
+      message: 'billing plan assignment metadata must not contain gate_bundle_key',
+    }, 422)
+  }
+  const gating = metadata.gating
+  if (gating && typeof gating === 'object' && !Array.isArray(gating)) {
+    const gatingObj = gating as Record<string, unknown>
+    if (
+      Object.prototype.hasOwnProperty.call(gatingObj, 'gate_bundle_key') ||
+      Object.prototype.hasOwnProperty.call(gatingObj, 'bundle')
+    ) {
+      throw new HttpException({
+        code: 'VALIDATION.INVALID_INPUT',
+        message: 'billing plan assignment metadata must not contain runtime gate bundle fields',
+      }, 422)
+    }
+  }
+  return metadata
 }
 
 function parseId(value: string, name: string): string {
@@ -128,6 +153,11 @@ function normalizeEntitlementEffect(value: unknown): EntitlementEffect | undefin
 
 function normalizeAssignmentStatus(value: unknown): AssignmentStatus | undefined {
   if (value === 'active' || value === 'paused' || value === 'canceled' || value === 'expired') return value
+  return undefined
+}
+
+function normalizeAssignmentScope(value: unknown): AssignmentScope | undefined {
+  if (value === 'account' || value === 'user') return value
   return undefined
 }
 
@@ -335,7 +365,7 @@ export class BillingPlansManagementService {
 
     const priority = body?.priority ?? 0
     const active = body?.active ?? true
-    const metadata = normalizeMetadata(body?.metadata)
+    const metadata = normalizeAssignmentMetadata(body?.metadata)
 
     await setRlsSession(trx, { realmId, isRealmAdmin: true })
 
@@ -432,12 +462,11 @@ export class BillingPlansManagementService {
       .where('plan_id', '=', id)
       .executeTakeFirst()
 
+    invalidateGateRuntimeCaches()
     if (body?.feature_codes !== undefined || body?.feature_family_codes !== undefined) {
       await this.replacePlanEntitlements(trx, realmId, id, body?.feature_family_codes, body?.feature_codes)
+      invalidateGateRuntimeCaches()
     }
-
-    // Plan bundle changes can affect many accounts. Keep this API O(1);
-    // grant-binding-sweep reconciles billing_accounts.current_bundle_id asynchronously.
 
     return this.getBillingPlan(req, id)
   }
@@ -627,6 +656,7 @@ export class BillingPlansManagementService {
 
     const ctxBillingAccountId = req?.ctx?.billingAccountId
     const queryBillingAccountId = typeof query?.billing_account_id === 'string' ? query.billing_account_id.trim() : ''
+    const queryBillingUserId = typeof query?.billing_user_id === 'string' ? query.billing_user_id.trim() : ''
     const allowCrossAccount = allowCrossAccountAccess(req?.ctx)
     if (allowCrossAccount && queryBillingAccountId && queryBillingAccountId !== ctxBillingAccountId) {
       req.ctx = req.ctx || {}
@@ -639,12 +669,19 @@ export class BillingPlansManagementService {
     if (!allowCrossAccount && queryBillingAccountId && ctxBillingAccountId && queryBillingAccountId !== ctxBillingAccountId) {
       throw new HttpException({ code: 'AUTH.INSUFFICIENT_SCOPE', message: 'billing_account_id mismatch' }, 403)
     }
-    await setRlsSession(trx, { realmId, billingAccountId, isRealmAdmin: allowCrossAccount })
+    const billingUserId = queryBillingUserId ? parseId(queryBillingUserId, 'billing_user_id') : ''
+    await setRlsSession(trx, {
+      realmId,
+      billingAccountId,
+      billingUserId: billingUserId || undefined,
+      isRealmAdmin: allowCrossAccount,
+    })
 
     const limit = clampLimit(Number(query?.limit ?? 50))
     const cursor = typeof query?.cursor === 'string' ? query.cursor.trim() : ''
     const status = normalizeAssignmentStatus(query?.status)
     const sourceKind = normalizeAssignmentSourceKind(query?.source_kind)
+    const assignmentScope = normalizeAssignmentScope(query?.assignment_scope)
     const windowStart = query?.window_start ? parseDate(query.window_start, 'window_start') : undefined
     const windowEnd = query?.window_end ? parseDate(query.window_end, 'window_end') : undefined
     const planId = query?.plan_id ? parseId(String(query.plan_id), 'plan_id') : ''
@@ -663,6 +700,8 @@ export class BillingPlansManagementService {
       .select([
         'bpa.assignment_id as assignment_id',
         'bpa.billing_account_id as billing_account_id',
+        'bpa.assignment_scope as assignment_scope',
+        'bpa.billing_user_id as billing_user_id',
         'bpa.plan_id as plan_id',
         'bp.plan_code as plan_code',
         'bpa.subscription_item_id as subscription_item_id',
@@ -679,6 +718,9 @@ export class BillingPlansManagementService {
       .where('bpa.billing_account_id', '=', billingAccountId)
       .orderBy('bpa.assignment_id', 'asc')
 
+    if (billingUserId) {
+      builder = builder.where('bpa.billing_user_id', '=', billingUserId)
+    }
     if (cursor) {
       builder = builder.where('bpa.assignment_id', '>', parseId(cursor, 'cursor'))
     }
@@ -687,6 +729,9 @@ export class BillingPlansManagementService {
     }
     if (sourceKind) {
       builder = builder.where('bpa.source_kind', '=', sourceKind)
+    }
+    if (assignmentScope) {
+      builder = builder.where('bpa.assignment_scope', '=', assignmentScope)
     }
     if (planId) {
       builder = builder.where('bpa.plan_id', '=', planId)
@@ -752,6 +797,8 @@ export class BillingPlansManagementService {
     req: AppRequest,
     body: {
       billing_account_id: string
+      assignment_scope: AssignmentScope
+      billing_user_id?: string | null
       plan_id: string
       subscription_item_id?: string | null
       source_kind: AssignmentSourceKind
@@ -768,6 +815,18 @@ export class BillingPlansManagementService {
     const billingAccountId = normalizeString(body?.billing_account_id)
     if (!billingAccountId) {
       throw new HttpException({ code: 'VALIDATION.INVALID_INPUT', message: 'billing_account_id is required' }, 422)
+    }
+    const assignmentScope = normalizeAssignmentScope(body?.assignment_scope)
+    if (!assignmentScope) {
+      throw new HttpException({ code: 'VALIDATION.INVALID_INPUT', message: 'assignment_scope is required' }, 422)
+    }
+    const billingUserIdRaw = normalizeString(body?.billing_user_id)
+    const billingUserId = billingUserIdRaw ? parseId(billingUserIdRaw, 'billing_user_id') : null
+    if (assignmentScope === 'user' && !billingUserId) {
+      throw new HttpException({ code: 'VALIDATION.INVALID_INPUT', message: 'billing_user_id is required for user assignments' }, 422)
+    }
+    if (assignmentScope === 'account' && billingUserId) {
+      throw new HttpException({ code: 'VALIDATION.INVALID_INPUT', message: 'billing_user_id must be omitted for account assignments' }, 422)
     }
     const ctxBillingAccountId = req?.ctx?.billingAccountId
     const allowCrossAccount = allowCrossAccountAccess(req?.ctx)
@@ -789,12 +848,22 @@ export class BillingPlansManagementService {
     const status = normalizeAssignmentStatus(body?.status) ?? 'active'
     const metadata = normalizeMetadata(body?.metadata)
 
-    await setRlsSession(trx, { realmId, billingAccountId, isRealmAdmin: true })
+    await setRlsSession(trx, {
+      realmId,
+      billingAccountId,
+      billingUserId: billingUserId ?? undefined,
+      isRealmAdmin: true,
+    })
 
     await this.ensurePlanExists(trx, realmId, planId)
+    if (assignmentScope === 'user') {
+      await this.ensureBillingUserBelongsToAccount(trx, realmId, billingAccountId, billingUserId as string)
+    }
 
     const row = await ensureBillingPlanAssignment(trx, {
       billingAccountId,
+      assignmentScope,
+      billingUserId,
       planId,
       subscriptionItemId: body?.subscription_item_id ?? null,
       sourceKind,
@@ -804,8 +873,6 @@ export class BillingPlansManagementService {
       status,
       metadata,
     })
-
-    await refreshBillingAccountState(trx, billingAccountId)
 
     return this.fetchAssignment(trx, realmId, billingAccountId, String(row.assignment_id))
   }
@@ -852,7 +919,7 @@ export class BillingPlansManagementService {
 
     const existing = await trx
       .selectFrom('billing_plan_assignments')
-      .select(['assignment_id'])
+      .select(['assignment_id', 'billing_user_id'])
       .where('billing_account_id', '=', billingAccountId)
       .where('assignment_id', '=', id)
       .executeTakeFirst()
@@ -879,7 +946,7 @@ export class BillingPlansManagementService {
       updates.status = status
     }
     if (body?.metadata !== undefined) {
-      updates.metadata = normalizeMetadata(body.metadata)
+      updates.metadata = normalizeAssignmentMetadata(body.metadata)
     }
 
     if (Object.keys(updates).length > 0) {
@@ -890,7 +957,7 @@ export class BillingPlansManagementService {
         .where('billing_account_id', '=', billingAccountId)
         .where('assignment_id', '=', id)
         .executeTakeFirst()
-      await refreshBillingAccountState(trx, billingAccountId)
+      invalidateGateRuntimeCaches()
     }
 
     return this.fetchAssignment(trx, realmId, billingAccountId, id)
@@ -985,6 +1052,8 @@ export class BillingPlansManagementService {
   private mapAssignmentRow(row: {
     assignment_id: unknown
     billing_account_id: unknown
+    assignment_scope: unknown
+    billing_user_id: unknown
     plan_id: unknown
     plan_code: unknown
     subscription_item_id: unknown
@@ -1000,6 +1069,8 @@ export class BillingPlansManagementService {
     return {
       assignment_id: String(row.assignment_id),
       billing_account_id: String(row.billing_account_id),
+      assignment_scope: row.assignment_scope as AssignmentScope,
+      billing_user_id: row.billing_user_id ? String(row.billing_user_id) : null,
       plan_id: String(row.plan_id),
       plan_code: String(row.plan_code),
       subscription_item_id: row.subscription_item_id ? String(row.subscription_item_id) : null,
@@ -1026,6 +1097,8 @@ export class BillingPlansManagementService {
       .select([
         'bpa.assignment_id as assignment_id',
         'bpa.billing_account_id as billing_account_id',
+        'bpa.assignment_scope as assignment_scope',
+        'bpa.billing_user_id as billing_user_id',
         'bpa.plan_id as plan_id',
         'bp.plan_code as plan_code',
         'bpa.subscription_item_id as subscription_item_id',
@@ -1112,6 +1185,24 @@ export class BillingPlansManagementService {
       .executeTakeFirst()
     if (!exists) {
       throw new HttpException({ code: 'NOT_FOUND', message: 'billing plan not found' }, 404)
+    }
+  }
+
+  private async ensureBillingUserBelongsToAccount(
+    trx: Kysely<Database>,
+    realmId: string,
+    billingAccountId: string,
+    billingUserId: string,
+  ): Promise<void> {
+    const exists = await trx
+      .selectFrom('billing_users')
+      .select(['billing_user_id'])
+      .where('realm_id', '=', realmId)
+      .where('billing_account_id', '=', billingAccountId)
+      .where('billing_user_id', '=', billingUserId)
+      .executeTakeFirst()
+    if (!exists) {
+      throw new HttpException({ code: 'NOT_FOUND', message: 'billing user not found for billing_account_id' }, 404)
     }
   }
 

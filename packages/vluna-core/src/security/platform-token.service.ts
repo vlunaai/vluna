@@ -10,6 +10,7 @@ export interface IssuePlatformTokenParams {
   principalId: string
   userId: string
   billingAccountId: string
+  billingUserId: string
   ttlSeconds: number
   platformScopes: string[]
   billingScopes: string[]
@@ -29,7 +30,9 @@ export interface PlatformTokenIssueResult {
 export interface PlatformTokenClaims extends TokenClaims {
   realm_id: string
   billing_account_id: string
-  principal_id: string
+  billing_user_id: string
+  billing_principal_id: string
+  business_user_id: string
   plt_scopes: string[]
   plt_traits?: Record<string, unknown>
   tu: 'plt'
@@ -43,7 +46,9 @@ type PlatformTokenPayload = Pick<PlatformTokenClaims,
   'scope' |
   'realm_id' |
   'billing_account_id' |
-  'principal_id' |
+  'billing_user_id' |
+  'billing_principal_id' |
+  'business_user_id' |
   'plt_scopes' |
   'tu' |
   'token_use' |
@@ -84,7 +89,9 @@ export class PlatformTokenService {
       scope: billingScopeText,
       realm_id: params.realmId,
       billing_account_id: params.billingAccountId,
-      principal_id: params.principalId,
+      billing_user_id: params.billingUserId,
+      billing_principal_id: params.principalId,
+      business_user_id: params.userId,
       plt_scopes: platformScopes,
       tu: 'plt',
       token_use: 'platform',

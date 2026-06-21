@@ -27,6 +27,7 @@ export type GrantBindingOverride = {
 }
 
 export type EnsureGrantAssignmentParams = {
+  billingUserId: string
   billingAccountId: string
   programId: string
   billingPlanAssignmentId?: string | null
@@ -42,6 +43,7 @@ export type EnsureGrantAssignmentParams = {
 
 export type IssueGrantParams = {
   realmId: string
+  billingUserId: string
   billingAccountId: string
   program: GrantProgramRow
   assignment: GrantAssignmentRow
@@ -166,6 +168,7 @@ export async function ensureGrantAssignment(
 ): Promise<GrantAssignmentRow> {
   const metadataSafe = jsonSafe(params.metadata ?? {}, 'grant_assignments.metadata')
   const insert: Insertable<Database['grant_assignments']> = {
+    billing_user_id: params.billingUserId,
     billing_account_id: params.billingAccountId,
     program_id: params.programId,
     billing_plan_assignment_id: params.billingPlanAssignmentId ?? null,
@@ -182,7 +185,7 @@ export async function ensureGrantAssignment(
     .values(insert)
     .onConflict((oc) =>
       oc
-        .columns(['billing_account_id', 'source_kind', 'source_ref', 'program_id'])
+        .columns(['billing_user_id', 'source_kind', 'source_ref', 'program_id'])
         .doUpdateSet({
           window_start: sql`least(grant_assignments.window_start, excluded.window_start)`,
           window_end: sql`case
@@ -199,6 +202,7 @@ export async function ensureGrantAssignment(
     )
     .returning([
       'assignment_id',
+      'billing_user_id',
       'billing_account_id',
       'program_id',
       'billing_plan_assignment_id',
@@ -233,6 +237,7 @@ export async function issueGrantForAssignment(
 
   await setRlsSession(trx, {
     realmId: params.realmId,
+    billingUserId: params.billingUserId,
     billingAccountId: params.billingAccountId,
     isRealmAdmin: params.isRealmAdmin ?? false,
   })
@@ -288,10 +293,11 @@ export async function issueGrantForAssignment(
 
   const idempotencyKey = params.idempotencyKey ?? buildGrantIdempotencyKey(String(assignment.assignment_id), allocSeq, period)
   const existingGrant = idempotencyKey
-    ? await loadGrantByIdempotencyKey(trx, idempotencyKey)
+    ? await loadGrantByIdempotencyKey(trx, params.billingUserId, idempotencyKey)
     : await loadGrantByAssignmentPeriod(trx, String(assignment.assignment_id), allocSeq, period)
 
   const insert: Insertable<Database['ledger_grants']> = {
+    billing_user_id: params.billingUserId,
     billing_account_id: params.billingAccountId,
     ledger_id: null,
     assignment_id: String(assignment.assignment_id),
@@ -352,6 +358,7 @@ export async function issueGrantForAssignment(
     const ledgerKey = params.ledgerIdempotencyKey
       ?? buildLedgerEntryKey(String(assignment.assignment_id), period, params.sourceRef)
     const ledgerResult = await appendLedgerEntry(trx, {
+      billingUserId: params.billingUserId,
       billingAccountId: params.billingAccountId,
       currencyCode: WALLET_LEDGER_CURRENCY,
       amountXusd: amountIssued,
@@ -690,11 +697,13 @@ function addYears(date: Date, years: number): Date {
 
 async function loadGrantByIdempotencyKey(
   trx: Transaction<Database>,
+  billingUserId: string,
   idempotencyKey: string,
 ): Promise<ExistingGrantRow | null> {
   const row = await trx
     .selectFrom('ledger_grants')
     .select(['grant_id', 'ledger_id', 'source_entry_id', 'on_ledger', 'amount_xusd'])
+    .where('billing_user_id', '=', billingUserId)
     .where('idempotency_key', '=', idempotencyKey)
     .executeTakeFirst()
 
@@ -761,7 +770,7 @@ function buildLedgerEntryKey(
 
 export async function ensureFallbackGrantForPeriod(
   trx: Kysely<Database> | Transaction<Database>,
-  params: { realmId: string; billingAccountId: string; periodStart: Date; periodEnd: Date },
+  params: { realmId: string; billingUserId: string; billingAccountId: string; periodStart: Date; periodEnd: Date },
 ): Promise<string> {
   // Gate Fallback Grant (kind='fallback')
   // Purpose: a gating/settlement "overage bucket" used when spendable grants are exhausted, so we can still
@@ -772,6 +781,7 @@ export async function ensureFallbackGrantForPeriod(
   const existing = await trx
     .selectFrom('ledger_grants')
     .select('grant_id')
+    .where('billing_user_id', '=', params.billingUserId)
     .where('billing_account_id', '=', params.billingAccountId)
     .where('kind', '=', 'fallback')
     .where('period_start', '=', params.periodStart)
@@ -783,9 +793,10 @@ export async function ensureFallbackGrantForPeriod(
   }
 
   const programId = await ensureFallbackProgram(trx, params.realmId)
-  const assignmentId = await ensureFallbackAssignment(trx, params.billingAccountId, programId)
+  const assignmentId = await ensureFallbackAssignment(trx, params.billingUserId, params.billingAccountId, programId)
 
   const insertValues: Insertable<Database['ledger_grants']> = {
+    billing_user_id: params.billingUserId,
     billing_account_id: params.billingAccountId,
     assignment_id: assignmentId,
     program_id: programId,
@@ -819,10 +830,10 @@ export async function ensureFallbackGrantForPeriod(
     .values(insertValues)
     .onConflict((oc) =>
       oc
-        .columns(['billing_account_id', 'kind', 'period_start', 'period_end'])
+        .columns(['billing_user_id', 'kind', 'period_start', 'period_end'])
         .where('kind', '=', 'fallback')
         // Keep this predicate aligned with the partial unique index
-        // `ux_grants_fallback_one_per_account_period`, otherwise Postgres
+        // `ux_grants_fallback_one_per_user_period`, otherwise Postgres
         // cannot infer the conflict target and will error at runtime.
         .where('period_start', 'is not', null)
         .where('period_end', 'is not', null)
@@ -844,6 +855,7 @@ export async function ensureFallbackGrantForPeriod(
   const fallback = await trx
     .selectFrom('ledger_grants')
     .select('grant_id')
+    .where('billing_user_id', '=', params.billingUserId)
     .where('billing_account_id', '=', params.billingAccountId)
     .where('kind', '=', 'fallback')
     .where('period_start', '=', params.periodStart)
@@ -917,14 +929,16 @@ async function ensureFallbackProgram(
 
 async function ensureFallbackAssignment(
   trx: Kysely<Database> | Transaction<Database>,
+  billingUserId: string,
   billingAccountId: string,
   programId: string,
 ): Promise<string> {
-  const sourceRef = `fallback:${billingAccountId}`
+  const sourceRef = `fallback:${billingUserId}`
 
   const existing = await trx
     .selectFrom('grant_assignments')
     .select('assignment_id')
+    .where('billing_user_id', '=', billingUserId)
     .where('billing_account_id', '=', billingAccountId)
     .where('program_id', '=', programId)
     .where('source_kind', '=', 'internal.catalog')
@@ -936,6 +950,7 @@ async function ensureFallbackAssignment(
   }
 
   const insertValues: Insertable<Database['grant_assignments']> = {
+    billing_user_id: billingUserId,
     billing_account_id: billingAccountId,
     program_id: programId,
     source_kind: 'internal.catalog',
@@ -953,7 +968,7 @@ async function ensureFallbackAssignment(
     .values(insertValues)
     .onConflict((oc) =>
       oc
-        .columns(['billing_account_id', 'source_kind', 'source_ref', 'program_id'])
+        .columns(['billing_user_id', 'source_kind', 'source_ref', 'program_id'])
         .doNothing(),
     )
     .returning('assignment_id')
@@ -966,6 +981,7 @@ async function ensureFallbackAssignment(
   const fallback = await trx
     .selectFrom('grant_assignments')
     .select('assignment_id')
+    .where('billing_user_id', '=', billingUserId)
     .where('billing_account_id', '=', billingAccountId)
     .where('program_id', '=', programId)
     .where('source_kind', '=', 'internal.catalog')
@@ -982,6 +998,7 @@ async function ensureFallbackAssignment(
 type ExpiredGrantRow = {
   grant_id: string
   realm_id: string
+  billing_user_id: string
   billing_account_id: string
   ledger_id: string | null
   currency_code: string | null
@@ -1046,6 +1063,7 @@ export async function closeGrants(
     .select([
       sql`g.grant_id`.as('grant_id'),
       sql`ba.realm_id`.as('realm_id'),
+      sql`g.billing_user_id`.as('billing_user_id'),
       sql`ba.billing_account_id`.as('billing_account_id'),
       sql`g.ledger_id`.as('ledger_id'),
       sql`g.on_ledger`.as('on_ledger'),
@@ -1121,8 +1139,14 @@ async function forfeitGrant(
 
   if (remaining > 0n) {
     if (row.on_ledger && row.ledger_id && row.currency_code) {
-      await setRlsSession(trx, { realmId: row.realm_id, billingAccountId: row.billing_account_id, isRealmAdmin: true })
+      await setRlsSession(trx, {
+        realmId: row.realm_id,
+        billingUserId: row.billing_user_id,
+        billingAccountId: row.billing_account_id,
+        isRealmAdmin: true,
+      })
       const result = await appendLedgerEntry(trx, {
+        billingUserId: row.billing_user_id,
         billingAccountId: row.billing_account_id,
         currencyCode: row.currency_code,
         amountXusd: -remaining,

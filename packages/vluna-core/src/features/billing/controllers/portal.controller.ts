@@ -8,7 +8,7 @@ import type { AppRequest } from '../../../types/app-request.js'
 import type { operations as BillingOps } from '../../../contracts/billing.js'
 import { JsonRequestBody, JsonResponse } from '../../../contracts/openapi-helpers.js'
 import { PrincipalGuard } from '../../../auth/guards/principal.guard.js'
-import { PrincipalBillingAccountGuard } from '../../../auth/guards/principal-billing-account.guard.js'
+import { BillingAccountGuard } from '../../../auth/guards/billing-account.guard.js'
 import { AuthRequiredGuard } from '../../../auth/guards/auth-required.guard.js'
 import { ServiceAuthGuard } from '../../../auth/guards/service-auth.guard.js'
 import { ServiceAccountGuard } from '../../../auth/guards/service-account.guard.js'
@@ -22,7 +22,7 @@ type CreatePortalBody = JsonRequestBody<BillingOps, 'createPortalSession'>
 type CreatePortal201 = JsonResponse<BillingOps, 'createPortalSession', 201>
 
 @Controller('portal')
-@UseGuards(RealmGuard, TokenClaimsGuard, RealmMembershipGuard, PrincipalGuard, PrincipalBillingAccountGuard)
+@UseGuards(RealmGuard, TokenClaimsGuard, RealmMembershipGuard, PrincipalGuard, BillingAccountGuard)
 export class PortalPublicController {
   constructor(private readonly portalApi: PortalApiService) {}
 
@@ -43,7 +43,7 @@ export class PortalPublicController {
 }
 
 @Controller('portal')
-@UseGuards(RealmGuard, AuthRequiredGuard, ServiceAuthGuard, TokenClaimsGuard, RealmMembershipGuard, ServiceAccountGuard, PrincipalGuard, PrincipalBillingAccountGuard)
+@UseGuards(RealmGuard, AuthRequiredGuard, ServiceAuthGuard, TokenClaimsGuard, RealmMembershipGuard, ServiceAccountGuard, PrincipalGuard, BillingAccountGuard)
 export class PortalServiceController {
   constructor(private readonly portalApi: PortalApiService) {}
 

@@ -9,8 +9,10 @@ import type { operations as BillingOps } from '../contracts/billing.js'
 import { JsonRequestBody, JsonResponse } from '../contracts/openapi-helpers.js'
 import type { AppRequest } from '../types/app-request.js'
 import { okEnvelope } from '../common/envelope.js'
-import { ensureBillingAccount } from './principal/billing-account.resolver.js'
+import { ensureBillingAccount, ensureBillingUser } from './principal/billing-account.resolver.js'
 import { Audit } from '../support/audit/audit.decorator.js'
+import { ensureBillingPlanGrantsEnrollmentSyncedForUser, issueGrantsForBillingUser } from '../services/billing-plan.service.js'
+import { db as coreDb } from '../db/index.js'
 
 type IssueTokenBody = JsonRequestBody<BillingOps, 'issuePlatformToken'>
 type IssueToken200 = JsonResponse<BillingOps, 'issuePlatformToken', 200>
@@ -52,15 +54,30 @@ export class TokenController {
     if (!account) {
       throw new HttpException('billing_account_not_found', 404)
     }
+    this.assertServiceKeyAllowsAccount(req, account.billingAccountId)
     req.ctx = req.ctx || {}
     req.ctx.billingAccountId = account.billingAccountId
     req.ctx.billingAccount = account
+    const billingUser = await ensureBillingUser({
+      realmId,
+      billingAccountId: account.billingAccountId,
+      userId,
+      autoCreate: true,
+      ctx: req.ctx,
+    })
+    if (!billingUser) {
+      throw new HttpException('billing_user_not_found', 404)
+    }
+    const dbHandle = req.ctx.db ?? coreDb()
+    await ensureBillingPlanGrantsEnrollmentSyncedForUser(dbHandle, account.billingAccountId, billingUser.billingUserId)
+    await issueGrantsForBillingUser(dbHandle, account.billingAccountId, billingUser.billingUserId)
 
     const issueResult = await this.platformTokenService.issue({
       realmId,
       principalId,
       userId,
       billingAccountId: account.billingAccountId,
+      billingUserId: billingUser.billingUserId,
       ttlSeconds: ttl,
       platformScopes,
       billingScopes,
@@ -75,9 +92,17 @@ export class TokenController {
       token_type: 'Bearer',
       expires_in: issueResult.expiresIn,
       expires_at: issueResult.expiresAt.toISOString(),
-      billing_account_id: account.billingAccountId
+      billing_account_id: account.billingAccountId,
+      billing_user_id: billingUser.billingUserId,
     }) as IssueToken200
     return response
+  }
+
+  private assertServiceKeyAllowsAccount(req: AppRequest, billingAccountId: string): void {
+    const allowedAccounts = req.ctx?.serviceApiKey?.allowedAccounts ?? []
+    if (allowedAccounts.length > 0 && !allowedAccounts.includes(billingAccountId)) {
+      throw new HttpException({ code: 'AUTH.SERVICE_KEY_ACCOUNT_FORBIDDEN', message: 'Service API key not authorized for billing account' }, 403)
+    }
   }
 
   private normalizePlatformScopes(input?: string[] | null): string[] {

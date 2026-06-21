@@ -59,21 +59,28 @@ BEGIN
   RETURN NEW;
 END$$;
 
--- Mark billing_accounts.metadata.grants_switch.dirty=true when billing_plan_assignments change.
+-- Mark billing_users.metadata.grants_switch.dirty=true when billing_plan_assignments change.
 -- This provides an explicit "needs sync" marker for the grants switch reconciler.
 CREATE OR REPLACE FUNCTION mark_grants_switch_dirty()
 RETURNS trigger
 LANGUAGE plpgsql
 AS $$
 DECLARE
+  bu uuid;
   ba uuid;
+  scope text;
 BEGIN
+  bu := COALESCE(NEW.billing_user_id, OLD.billing_user_id);
   ba := COALESCE(NEW.billing_account_id, OLD.billing_account_id);
-  IF ba IS NULL THEN
+  scope := COALESCE(NEW.assignment_scope, OLD.assignment_scope, 'user');
+  IF scope = 'user' AND bu IS NULL THEN
+    RETURN NULL;
+  END IF;
+  IF scope = 'account' AND ba IS NULL THEN
     RETURN NULL;
   END IF;
 
-  UPDATE billing_accounts
+  UPDATE billing_users
   SET
     metadata =
       COALESCE(metadata, '{}'::jsonb)
@@ -86,7 +93,9 @@ BEGIN
         )
       ),
     updated_at = now()
-  WHERE billing_account_id = ba;
+  WHERE
+    (scope = 'user' AND billing_user_id = bu)
+    OR (scope = 'account' AND billing_account_id = ba AND status = 'active');
 
   RETURN NULL;
 END;
@@ -109,6 +118,19 @@ DECLARE
 BEGIN
   IF is_valid_uuid(billing_account_id_str) THEN
     RETURN billing_account_id_str::uuid;
+  ELSE
+    RETURN NULL;
+  END IF;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION get_current_billing_user_id()
+RETURNS uuid LANGUAGE plpgsql IMMUTABLE PARALLEL SAFE AS $$
+DECLARE
+  billing_user_id_str text := current_setting('app.billing_user_id', true);
+BEGIN
+  IF is_valid_uuid(billing_user_id_str) THEN
+    RETURN billing_user_id_str::uuid;
   ELSE
     RETURN NULL;
   END IF;
@@ -149,11 +171,25 @@ CREATE TABLE IF NOT EXISTS service_api_keys (
 
 -- ---------- 1) Core: Accounts ------------------------------------------
 
+CREATE TABLE IF NOT EXISTS gate_policy_bundles (
+  bundle_id     uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  realm_id      text        NOT NULL REFERENCES realms(realm_id) ON DELETE RESTRICT,
+  bundle_key    text        NOT NULL,
+  name          text        NULL,
+  status        text        NOT NULL DEFAULT 'active' CHECK (status IN ('active','disabled')),
+  metadata      jsonb       NOT NULL DEFAULT '{}'::jsonb,
+  created_at    timestamptz NOT NULL DEFAULT now(),
+  updated_at    timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (realm_id, bundle_key)
+);
+
 CREATE TABLE IF NOT EXISTS billing_accounts (
   billing_account_id       uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   realm_id                 text NOT NULL REFERENCES realms(realm_id) ON DELETE RESTRICT,  -- normalized FK to realms
   billing_principal_id     text NOT NULL,
-  current_bundle_id        uuid NULL,
+  seat_limit               integer NULL CHECK (seat_limit IS NULL OR seat_limit >= 0),
+  seat_limit_source        text NULL,
+  seat_limit_updated_at    timestamptz NULL,
   metadata                 jsonb NOT NULL DEFAULT '{}'::jsonb,
   created_at               timestamptz NOT NULL DEFAULT now(),
   updated_at               timestamptz NOT NULL DEFAULT now(),
@@ -161,6 +197,22 @@ CREATE TABLE IF NOT EXISTS billing_accounts (
 );
 
 CREATE INDEX IF NOT EXISTS ix_billing_accounts_realm ON billing_accounts(realm_id);
+
+CREATE TABLE IF NOT EXISTS billing_users (
+  billing_user_id         uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  realm_id                text NOT NULL REFERENCES realms(realm_id) ON DELETE RESTRICT,
+  billing_account_id      uuid NOT NULL REFERENCES billing_accounts(billing_account_id) ON DELETE CASCADE,
+  business_user_id        text NOT NULL,
+  status                  text NOT NULL DEFAULT 'active' CHECK (status IN ('active','disabled','deleted')),
+  metadata                jsonb NOT NULL DEFAULT '{}'::jsonb,
+  created_at              timestamptz NOT NULL DEFAULT now(),
+  updated_at              timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (realm_id, billing_account_id, business_user_id),
+  CONSTRAINT ux_billing_users_id_account UNIQUE (billing_user_id, billing_account_id)
+);
+
+CREATE INDEX IF NOT EXISTS ix_billing_users_realm_account ON billing_users(realm_id, billing_account_id);
+CREATE INDEX IF NOT EXISTS ix_billing_users_business_user ON billing_users(billing_account_id, business_user_id);
 
 CREATE TABLE IF NOT EXISTS billing_account_billing_details (
   billing_account_id uuid PRIMARY KEY
@@ -259,6 +311,8 @@ CREATE TABLE IF NOT EXISTS billing_plans (
 CREATE TABLE IF NOT EXISTS billing_plan_assignments (
   assignment_id      uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   billing_account_id uuid      NOT NULL REFERENCES billing_accounts(billing_account_id) ON DELETE CASCADE,
+  assignment_scope   text      NOT NULL CHECK (assignment_scope IN ('account','user')),
+  billing_user_id    uuid      NULL REFERENCES billing_users(billing_user_id) ON DELETE CASCADE,
   plan_id            uuid      NOT NULL REFERENCES billing_plans(plan_id) ON DELETE RESTRICT,
   subscription_item_id uuid    NULL,
   source_kind        text      NOT NULL CHECK (source_kind IN (
@@ -272,10 +326,21 @@ CREATE TABLE IF NOT EXISTS billing_plan_assignments (
   metadata           jsonb     NOT NULL DEFAULT '{}'::jsonb,
   created_at         timestamptz NOT NULL DEFAULT now(),
   updated_at         timestamptz NOT NULL DEFAULT now(),
-  CONSTRAINT ux_bpa_account_plan_source UNIQUE (billing_account_id, plan_id, source_kind, source_ref)
+  CONSTRAINT chk_bpa_assignment_scope_user CHECK (
+    (assignment_scope = 'account' AND billing_user_id IS NULL)
+    OR
+    (assignment_scope = 'user' AND billing_user_id IS NOT NULL)
+  )
 );
 
-CREATE INDEX IF NOT EXISTS ix_bpa_account ON billing_plan_assignments (billing_account_id, status);
+CREATE UNIQUE INDEX IF NOT EXISTS ux_bpa_user_plan_source
+  ON billing_plan_assignments (billing_user_id, plan_id, source_kind, source_ref)
+  WHERE assignment_scope = 'user' AND billing_user_id IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS ux_bpa_account_plan_source
+  ON billing_plan_assignments (billing_account_id, plan_id, source_kind, source_ref)
+  WHERE assignment_scope = 'account';
+CREATE INDEX IF NOT EXISTS ix_bpa_account ON billing_plan_assignments (billing_account_id, assignment_scope, billing_user_id, status);
+CREATE INDEX IF NOT EXISTS ix_bpa_user ON billing_plan_assignments (billing_user_id, status) WHERE billing_user_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS ix_bpa_plan ON billing_plan_assignments (plan_id, status);
 CREATE INDEX IF NOT EXISTS ix_bpa_valid_range ON billing_plan_assignments USING gist (valid_range);
 
@@ -435,21 +500,27 @@ END$$;
 
 -- ============================================================
 -- Ledgers: ledger_accounts / ledger_entries / ledger_entry_labels
--- Amount unit: XUSD (integer). One BA × one currency = one wallet.
+-- Amount unit: XUSD (integer). One billing user × one currency = one wallet.
 -- ============================================================
 
 -- ---------- ledger_accounts ----------
 CREATE TABLE IF NOT EXISTS ledger_accounts (
   ledger_id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  billing_user_id    uuid NOT NULL REFERENCES billing_users(billing_user_id) ON DELETE CASCADE,
   billing_account_id uuid NOT NULL REFERENCES billing_accounts(billing_account_id) ON DELETE CASCADE,
   currency_code      text NOT NULL REFERENCES currencies(code),
   balance_xusd       bigint NOT NULL DEFAULT 0,   -- authoritative balance in XUSD
   updated_at         timestamptz NOT NULL DEFAULT now(),
 
-  UNIQUE (billing_account_id, currency_code),
-  CONSTRAINT uq_la_lid_baid UNIQUE (ledger_id, billing_account_id)
+  UNIQUE (billing_user_id, currency_code),
+  CONSTRAINT uq_la_lid_buid UNIQUE (ledger_id, billing_user_id),
+  CONSTRAINT fk_la_user_account
+    FOREIGN KEY (billing_user_id, billing_account_id)
+    REFERENCES billing_users(billing_user_id, billing_account_id)
+    ON DELETE CASCADE
 );
 
+CREATE INDEX IF NOT EXISTS ix_ledger_accounts_buid ON ledger_accounts(billing_user_id);
 CREATE INDEX IF NOT EXISTS ix_ledger_accounts_baid ON ledger_accounts(billing_account_id);
 CREATE INDEX IF NOT EXISTS ix_ledger_accounts_curr ON ledger_accounts(currency_code);
 
@@ -458,6 +529,7 @@ CREATE INDEX IF NOT EXISTS ix_ledger_accounts_curr ON ledger_accounts(currency_c
 CREATE TABLE IF NOT EXISTS ledger_entries (
   entry_id            uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   ledger_id           uuid NOT NULL REFERENCES ledger_accounts(ledger_id),
+  billing_user_id     uuid   NOT NULL,
   billing_account_id  uuid   NOT NULL,
   -- money
   amount_xusd     bigint NOT NULL,  -- sign indicates effect (+ increase, - decrease)
@@ -478,13 +550,18 @@ CREATE TABLE IF NOT EXISTS ledger_entries (
   idempotency_key text  NOT NULL,         -- unique per ledger
 
   CONSTRAINT fk_le_parent
-    FOREIGN KEY (ledger_id, billing_account_id)
-    REFERENCES ledger_accounts(ledger_id, billing_account_id)
+    FOREIGN KEY (ledger_id, billing_user_id)
+    REFERENCES ledger_accounts(ledger_id, billing_user_id)
+    ON DELETE CASCADE,
+  CONSTRAINT fk_le_user_account
+    FOREIGN KEY (billing_user_id, billing_account_id)
+    REFERENCES billing_users(billing_user_id, billing_account_id)
     ON DELETE CASCADE,
   UNIQUE (ledger_id, idempotency_key)
 );
 
 -- indexes
+CREATE INDEX IF NOT EXISTS ix_le_bu_created ON ledger_entries (billing_user_id, created_at);
 CREATE INDEX IF NOT EXISTS ix_le_ba_created ON ledger_entries (billing_account_id, created_at);
 CREATE INDEX IF NOT EXISTS ix_le_ledger_time ON ledger_entries (ledger_id, created_at);
 CREATE INDEX IF NOT EXISTS ix_le_component ON ledger_entries (ledger_id, econ_component_kind, created_at);
@@ -636,28 +713,33 @@ END$$;
 -- Wallet: ledgers
 DO $$
 BEGIN
-  -- SELECT by account
+  -- SELECT by runtime user
   BEGIN
     CREATE POLICY cl_account_read ON ledger_accounts FOR SELECT USING (
       EXISTS (SELECT 1 FROM billing_accounts ba
                 WHERE ba.billing_account_id = ledger_accounts.billing_account_id
-                  AND ba.billing_account_id = get_current_billing_account_id())
+                  AND ba.billing_account_id = get_current_billing_account_id()
+                  AND ba.realm_id = current_setting('app.realm_id', true))
+      AND ledger_accounts.billing_user_id = get_current_billing_user_id()
     );
   EXCEPTION WHEN duplicate_object THEN NULL; END;
 
-  -- INSERT by same account
+  -- INSERT by runtime user
   BEGIN
     CREATE POLICY cl_account_insert ON ledger_accounts FOR INSERT WITH CHECK (
       ledger_accounts.billing_account_id = get_current_billing_account_id()
+      AND ledger_accounts.billing_user_id = get_current_billing_user_id()
     );
   EXCEPTION WHEN duplicate_object THEN NULL; END;
 
-  -- UPDATE by same account
+  -- UPDATE by runtime user
   BEGIN
     CREATE POLICY cl_account_write ON ledger_accounts FOR UPDATE USING (
       ledger_accounts.billing_account_id = get_current_billing_account_id()
+      AND ledger_accounts.billing_user_id = get_current_billing_user_id()
     ) WITH CHECK (
       ledger_accounts.billing_account_id = get_current_billing_account_id()
+      AND ledger_accounts.billing_user_id = get_current_billing_user_id()
     );
   EXCEPTION WHEN duplicate_object THEN NULL; END;
 
@@ -676,24 +758,26 @@ END$$;
 -- Wallet: transactions
 DO $$
 BEGIN
-  -- SELECT by account
+  -- SELECT by runtime user
   BEGIN
     CREATE POLICY ct_account_read ON ledger_entries FOR SELECT USING (
       EXISTS (
         SELECT 1 FROM ledger_accounts cl
         WHERE cl.ledger_id = ledger_entries.ledger_id
           AND cl.billing_account_id = get_current_billing_account_id()
+          AND cl.billing_user_id = get_current_billing_user_id()
       )
     );
   EXCEPTION WHEN duplicate_object THEN NULL; END;
 
-  -- INSERT by same account (via ledger join)
+  -- INSERT by runtime user (via ledger join)
   BEGIN
     CREATE POLICY ct_account_write ON ledger_entries FOR INSERT WITH CHECK (
       EXISTS (
         SELECT 1 FROM ledger_accounts cl
         WHERE cl.ledger_id = ledger_entries.ledger_id
           AND cl.billing_account_id = get_current_billing_account_id()
+          AND cl.billing_user_id = get_current_billing_user_id()
       )
     );
   EXCEPTION WHEN duplicate_object THEN NULL; END;
@@ -961,8 +1045,18 @@ BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE schemaname = current_schema() AND tablename='billing_plan_assignments' AND policyname='bpa_rw') THEN
     CREATE POLICY bpa_rw ON billing_plan_assignments FOR ALL USING (
       billing_plan_assignments.billing_account_id = get_current_billing_account_id()
+      AND (
+        get_current_billing_user_id() IS NULL
+        OR billing_plan_assignments.assignment_scope = 'account'
+        OR billing_plan_assignments.billing_user_id = get_current_billing_user_id()
+      )
     ) WITH CHECK (
       billing_plan_assignments.billing_account_id = get_current_billing_account_id()
+      AND (
+        get_current_billing_user_id() IS NULL
+        OR billing_plan_assignments.assignment_scope = 'account'
+        OR billing_plan_assignments.billing_user_id = get_current_billing_user_id()
+      )
     );
   END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE schemaname = current_schema() AND tablename='billing_plan_assignments' AND policyname='bpa_realm_admin_rw') THEN
@@ -1225,6 +1319,7 @@ END$$;
 -- --------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS budgets (
   budget_id           uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  billing_user_id     UUID NOT NULL REFERENCES billing_users(billing_user_id) ON DELETE CASCADE,
   billing_account_id  UUID NOT NULL REFERENCES billing_accounts(billing_account_id) ON DELETE CASCADE,
   name                TEXT NULL,
   status              TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','closing','closed','expired','canceled')),
@@ -1256,20 +1351,25 @@ CREATE TABLE IF NOT EXISTS budgets (
     (scope_kind IS NULL AND scope_ref IS NULL)
     OR (scope_kind = 'global'      AND scope_ref IS NULL)
     OR (scope_kind IN ('feature','feature_set') AND scope_ref IS NOT NULL)
-  )
+  ),
+  CONSTRAINT fk_budgets_user_account
+    FOREIGN KEY (billing_user_id, billing_account_id)
+    REFERENCES billing_users(billing_user_id, billing_account_id)
+    ON DELETE CASCADE
 
 );
 
 
 -- High-frequency lookups
 CREATE INDEX IF NOT EXISTS ix_budgets_close_status ON budgets (budget_id, status, closed_at);
+CREATE INDEX IF NOT EXISTS ix_budgets_user_status ON budgets (billing_user_id, status);
 CREATE INDEX IF NOT EXISTS ix_budgets_acct_status ON budgets (billing_account_id, status);
 CREATE INDEX IF NOT EXISTS ix_budgets_scope_kind   ON budgets (scope_kind);
 -- Optional: scope payload search
 CREATE INDEX IF NOT EXISTS ix_budgets_scope_payload_gin ON budgets USING GIN (scope_payload jsonb_path_ops);
 
 -- --------------------------------------------------------------------------
--- 5) Row Level Security (account-scoped RLS, consistent with existing style)
+-- 5) Row Level Security
 -- --------------------------------------------------------------------------
 -- budgets — enable RLS
 ALTER TABLE budgets ENABLE ROW LEVEL SECURITY;
@@ -1288,9 +1388,11 @@ BEGIN
       ON budgets
       USING (
         billing_account_id = get_current_billing_account_id()
+        AND billing_user_id = get_current_billing_user_id()
       )
       WITH CHECK (
         billing_account_id = get_current_billing_account_id()
+        AND billing_user_id = get_current_billing_user_id()
       )
     $pol$;
   END IF;
@@ -1336,10 +1438,11 @@ CREATE TABLE IF NOT EXISTS idempotency_envelopes (
   operation            TEXT        NOT NULL,      -- e.g. 'commit' | 'authorize' | 'cancel'
 
   -- generic scope (free-form; avoid hard coupling to domain tables)
-  scope_type           TEXT        NOT NULL DEFAULT 'none',  -- 'none' | 'lease' | 'account' | others
+  scope_type           TEXT        NOT NULL DEFAULT 'none',  -- 'none' | 'lease' | 'user' | 'account' | others
   scope_id             TEXT        NULL,                     -- free-form scope identifier
 
-  -- account dimension (kept for fast lookup/RLS when scope is account)
+  -- runtime user/account dimensions (user is the runtime idempotency anchor)
+  billing_user_id      UUID        NULL REFERENCES billing_users(billing_user_id) ON DELETE SET NULL,
   billing_account_id   UUID        NULL REFERENCES billing_accounts(billing_account_id) ON DELETE SET NULL,
 
   -- idempotency key & request fingerprint
@@ -1359,8 +1462,9 @@ CREATE TABLE IF NOT EXISTS idempotency_envelopes (
 
   -- structural sanity (do NOT enumerate all scope types; only constrain known ones)
   CHECK (scope_type <> 'account' OR billing_account_id IS NOT NULL),
+  CHECK (scope_type <> 'user' OR billing_user_id IS NOT NULL),
   CHECK (scope_type <> 'lease'   OR scope_id IS NOT NULL),
-  CHECK (scope_type <> 'none'    OR (scope_id IS NULL AND billing_account_id IS NULL))
+  CHECK (scope_type <> 'none'    OR (scope_id IS NULL AND billing_account_id IS NULL AND billing_user_id IS NULL))
 );
 
 -- -----------------------------
@@ -1371,7 +1475,12 @@ CREATE UNIQUE INDEX IF NOT EXISTS ux_ie_lease
   ON idempotency_envelopes (realm_id, service, operation, scope_type, scope_id, key)
   WHERE scope_type = 'lease' AND scope_id IS NOT NULL;
 
--- account-scoped: uniqueness by billing_account_id
+-- user-scoped: uniqueness by billing_user_id
+CREATE UNIQUE INDEX IF NOT EXISTS ux_ie_user
+  ON idempotency_envelopes (realm_id, service, operation, scope_type, billing_user_id, key)
+  WHERE scope_type = 'user' AND billing_user_id IS NOT NULL;
+
+-- account-scoped: uniqueness by billing_account_id (account/payor APIs only)
 CREATE UNIQUE INDEX IF NOT EXISTS ux_ie_account
   ON idempotency_envelopes (realm_id, service, operation, scope_type, billing_account_id, key)
   WHERE scope_type = 'account' AND billing_account_id IS NOT NULL;
@@ -1384,16 +1493,17 @@ CREATE UNIQUE INDEX IF NOT EXISTS ux_ie_none
 -- other/unknown scopes: default uniqueness by (scope_type, scope_id)
 CREATE UNIQUE INDEX IF NOT EXISTS ux_ie_other
   ON idempotency_envelopes (realm_id, service, operation, scope_type, COALESCE(scope_id, ''), key)
-  WHERE scope_type NOT IN ('lease','account','none');
+  WHERE scope_type NOT IN ('lease','user','account','none');
 
 -- Helpful secondary indexes
 CREATE INDEX IF NOT EXISTS ix_ie_created    ON idempotency_envelopes (created_at);
 CREATE INDEX IF NOT EXISTS ix_ie_status     ON idempotency_envelopes (status);
 CREATE INDEX IF NOT EXISTS ix_ie_svc_op     ON idempotency_envelopes (service, operation);
+CREATE INDEX IF NOT EXISTS ix_ie_user       ON idempotency_envelopes (billing_user_id);
 CREATE INDEX IF NOT EXISTS ix_ie_account    ON idempotency_envelopes (billing_account_id);
 CREATE INDEX IF NOT EXISTS ix_ie_lookup     ON idempotency_envelopes (realm_id, service, operation, key);
 
--- 若存在 billing_account_id，则须匹配当前账号
+-- 若存在 billing_user_id，则须匹配当前 runtime user；account-only envelopes are for account/payor APIs.
 ALTER TABLE idempotency_envelopes ENABLE ROW LEVEL SECURITY;
 
 DO $$
@@ -1404,15 +1514,15 @@ BEGIN
       USING (
         realm_id = current_setting('app.realm_id', true)
         AND (
-          billing_account_id IS NULL
-          OR billing_account_id::text = current_setting('app.billing_account_id', true)
+          (billing_user_id IS NULL OR billing_user_id = get_current_billing_user_id())
+          AND (billing_account_id IS NULL OR billing_account_id = get_current_billing_account_id())
         )
       )
       WITH CHECK (
         realm_id = current_setting('app.realm_id', true)
         AND (
-          billing_account_id IS NULL
-          OR billing_account_id::text = current_setting('app.billing_account_id', true)
+          (billing_user_id IS NULL OR billing_user_id = get_current_billing_user_id())
+          AND (billing_account_id IS NULL OR billing_account_id = get_current_billing_account_id())
         )
       );
   EXCEPTION WHEN duplicate_object THEN NULL; END;
@@ -1505,9 +1615,10 @@ CREATE INDEX IF NOT EXISTS ix_gc_realm_status_start ON grant_campaigns (realm_id
 CREATE INDEX IF NOT EXISTS ix_gc_realm_window ON grant_campaigns (realm_id, window_start, window_end);
 
 -- ---------- grant_assignments ----------
--- Assign a program to a billing account (webhook/subscription/ops); drives grant creation
+-- Assign a program to a billing user (webhook/subscription/ops); drives grant creation
 CREATE TABLE IF NOT EXISTS grant_assignments (
   assignment_id         uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  billing_user_id       uuid      NOT NULL REFERENCES billing_users(billing_user_id) ON DELETE CASCADE,
   billing_account_id    uuid      NOT NULL REFERENCES billing_accounts(billing_account_id) ON DELETE CASCADE,
   program_id            uuid      NOT NULL REFERENCES grant_programs(program_id) ON DELETE RESTRICT,
   billing_plan_assignment_id uuid NULL REFERENCES billing_plan_assignments(assignment_id) ON DELETE SET NULL,
@@ -1531,11 +1642,16 @@ CREATE TABLE IF NOT EXISTS grant_assignments (
   created_at            timestamptz NOT NULL DEFAULT now(),
   updated_at            timestamptz NOT NULL DEFAULT now(),
 
-  UNIQUE (billing_account_id, source_kind, source_ref, program_id),
+  UNIQUE (billing_user_id, source_kind, source_ref, program_id),
+  CONSTRAINT fk_ga_user_account
+    FOREIGN KEY (billing_user_id, billing_account_id)
+    REFERENCES billing_users(billing_user_id, billing_account_id)
+    ON DELETE CASCADE,
   CONSTRAINT chk_ga_bpa_id_required CHECK (source_kind <> 'billing_plan_assignment' OR billing_plan_assignment_id IS NOT NULL),
   CONSTRAINT chk_ga_campaign_id_required CHECK (source_kind <> 'ops.campaign' OR campaign_id IS NOT NULL)
 );
 
+CREATE INDEX IF NOT EXISTS ix_ga_bu_program    ON grant_assignments (billing_user_id, program_id, status);
 CREATE INDEX IF NOT EXISTS ix_ga_ba_program    ON grant_assignments (billing_account_id, program_id, status);
 CREATE INDEX IF NOT EXISTS ix_ga_ba_bpa        ON grant_assignments (billing_account_id, billing_plan_assignment_id);
 CREATE INDEX IF NOT EXISTS ix_ga_ba_campaign   ON grant_assignments (billing_account_id, campaign_id);
@@ -1546,6 +1662,7 @@ CREATE INDEX IF NOT EXISTS ix_ga_range_gist    ON grant_assignments USING gist (
 -- Merged model: one row = one issuance decision (from a binding) + one consumable lot (strict 1:1)
 CREATE TABLE IF NOT EXISTS ledger_grants (
   grant_id               uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  billing_user_id        uuid     NOT NULL REFERENCES billing_users(billing_user_id) ON DELETE CASCADE,
   billing_account_id     uuid     NOT NULL REFERENCES billing_accounts(billing_account_id) ON DELETE CASCADE,
   ledger_id              uuid     NULL     REFERENCES ledger_accounts(ledger_id) ON DELETE SET NULL,
 
@@ -1585,24 +1702,30 @@ CREATE TABLE IF NOT EXISTS ledger_grants (
 
   -- Idempotent upsert key: one binding + one period + one seq → one row.
   -- Use NULLS NOT DISTINCT so open-ended one-time grants (period_end IS NULL) still collide.
-  CONSTRAINT ux_ledger_grants_assignment_period_seq UNIQUE NULLS NOT DISTINCT (assignment_id, period_start, period_end, alloc_seq)
+  CONSTRAINT ux_ledger_grants_assignment_period_seq UNIQUE NULLS NOT DISTINCT (assignment_id, period_start, period_end, alloc_seq),
+  CONSTRAINT fk_lg_user_account
+    FOREIGN KEY (billing_user_id, billing_account_id)
+    REFERENCES billing_users(billing_user_id, billing_account_id)
+    ON DELETE CASCADE
 );
 
--- Partial uniqueness for non-null idempotency keys
+-- Partial uniqueness for non-null idempotency keys, scoped to the runtime billing user.
 CREATE UNIQUE INDEX IF NOT EXISTS ux_ledger_grants_idem
-  ON ledger_grants(idempotency_key)
+  ON ledger_grants(billing_user_id, idempotency_key)
   WHERE idempotency_key IS NOT NULL;
 
--- Fallback grants are period-scoped overage buckets (one per account × period).
-CREATE UNIQUE INDEX IF NOT EXISTS ux_grants_fallback_one_per_account_period
-  ON ledger_grants (billing_account_id, kind, period_start, period_end)
+-- Fallback grants are period-scoped overage buckets (one per user × period).
+CREATE UNIQUE INDEX IF NOT EXISTS ux_grants_fallback_one_per_user_period
+  ON ledger_grants (billing_user_id, kind, period_start, period_end)
   WHERE kind = 'fallback' AND period_start IS NOT NULL AND period_end IS NOT NULL;
 
-CREATE INDEX IF NOT EXISTS ix_grants_fallback_ba_period_end
-  ON ledger_grants (billing_account_id, kind, period_end DESC)
+CREATE INDEX IF NOT EXISTS ix_grants_fallback_bu_period_end
+  ON ledger_grants (billing_user_id, kind, period_end DESC)
   WHERE kind = 'fallback' AND period_end IS NOT NULL;
 
 -- Hot-path indexes: selection and audit
+CREATE INDEX IF NOT EXISTS ix_ledger_grants_bu_window_pri
+  ON ledger_grants(billing_user_id, window_end, priority);
 CREATE INDEX IF NOT EXISTS ix_ledger_grants_ba_window_pri
   ON ledger_grants(billing_account_id, window_end, priority);
 CREATE INDEX IF NOT EXISTS ix_ledger_grants_assignment_period
@@ -1629,6 +1752,7 @@ END $$;
 CREATE TABLE IF NOT EXISTS billing_ratings (
   rating_id                 uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   realm_id                   text        NOT NULL REFERENCES realms(realm_id) ON DELETE RESTRICT,
+  billing_user_id            uuid        NOT NULL REFERENCES billing_users(billing_user_id) ON DELETE CASCADE,
   billing_account_id         uuid        NOT NULL REFERENCES billing_accounts(billing_account_id) ON DELETE CASCADE,
 
   -- rating variant
@@ -1659,9 +1783,14 @@ CREATE TABLE IF NOT EXISTS billing_ratings (
   rated_at                   timestamptz NOT NULL DEFAULT now(),
   created_at                 timestamptz NOT NULL DEFAULT now(),
 
-  UNIQUE (realm_id, idempotency_id)
+  UNIQUE (realm_id, idempotency_id),
+  CONSTRAINT fk_br_user_account
+    FOREIGN KEY (billing_user_id, billing_account_id)
+    REFERENCES billing_users(billing_user_id, billing_account_id)
+    ON DELETE CASCADE
 );
 
+CREATE INDEX IF NOT EXISTS ix_br_buser_rated   ON billing_ratings (billing_user_id, rated_at);
 CREATE INDEX IF NOT EXISTS ix_br_bacct_rated   ON billing_ratings (billing_account_id, rated_at);
 CREATE INDEX IF NOT EXISTS ix_br_feature_rated ON billing_ratings (feature_code, rated_at);
 CREATE INDEX IF NOT EXISTS ix_br_fp            ON billing_ratings (pricing_fingerprint);
@@ -1678,15 +1807,19 @@ CREATE INDEX IF NOT EXISTS ix_br_realm_rated_pricing_fp
 CREATE INDEX IF NOT EXISTS ix_br_realm_bacct_rated
   ON billing_ratings (realm_id, billing_account_id, rated_at);
 
+CREATE INDEX IF NOT EXISTS ix_br_realm_buser_rated
+  ON billing_ratings (realm_id, billing_user_id, rated_at);
+
 -- =====================================================================
 -- Phase 2: Ratings aggregation runs (windowed, N inputs -> 1 rating)
--- Account-scoped only (billing_account_id is required).
+-- User-scoped rating aggregation (billing_user_id is required); account id is denormalized for reports.
 -- Requires billing_ratings to exist.
 -- =====================================================================
 
 CREATE TABLE IF NOT EXISTS billing_ratings_aggregation_runs (
   run_id               uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   realm_id             text   NOT NULL REFERENCES realms(realm_id) ON DELETE RESTRICT,
+  billing_user_id      uuid   NOT NULL REFERENCES billing_users(billing_user_id) ON DELETE CASCADE,
   billing_account_id   uuid   NOT NULL REFERENCES billing_accounts(billing_account_id) ON DELETE CASCADE,
   contract_id          uuid   NULL, -- resolved by caller; may be null when no active contract
   policy_id            text   NOT NULL,
@@ -1703,14 +1836,20 @@ CREATE TABLE IF NOT EXISTS billing_ratings_aggregation_runs (
   metadata             jsonb  NOT NULL DEFAULT '{}'::jsonb,
   created_at           timestamptz NOT NULL DEFAULT now(),
   updated_at           timestamptz NOT NULL DEFAULT now(),
-  UNIQUE (realm_id, billing_account_id, contract_id, policy_id, policy_version, window_start, group_key),
-  UNIQUE (idempotency_key)
+  UNIQUE (realm_id, billing_user_id, contract_id, policy_id, policy_version, window_start, group_key),
+  UNIQUE (idempotency_key),
+  CONSTRAINT fk_brar_user_account
+    FOREIGN KEY (billing_user_id, billing_account_id)
+    REFERENCES billing_users(billing_user_id, billing_account_id)
+    ON DELETE CASCADE
 );
 
 CREATE INDEX IF NOT EXISTS ix_brar_realm_window
   ON billing_ratings_aggregation_runs (realm_id, window_start);
 CREATE INDEX IF NOT EXISTS ix_brar_ba_window
   ON billing_ratings_aggregation_runs (billing_account_id, window_start);
+CREATE INDEX IF NOT EXISTS ix_brar_bu_window
+  ON billing_ratings_aggregation_runs (billing_user_id, window_start);
 CREATE INDEX IF NOT EXISTS ix_brar_rating
   ON billing_ratings_aggregation_runs (rating_id);
 
@@ -1728,7 +1867,8 @@ DECLARE
   expr text;
 BEGIN
   BEGIN EXECUTE 'ALTER TABLE billing_ratings_aggregation_runs ENABLE ROW LEVEL SECURITY'; EXCEPTION WHEN others THEN NULL; END;
-  expr := 'billing_ratings_aggregation_runs.billing_account_id = get_current_billing_account_id()
+  expr := 'billing_ratings_aggregation_runs.billing_user_id = get_current_billing_user_id()
+           AND billing_ratings_aggregation_runs.billing_account_id = get_current_billing_account_id()
            AND billing_ratings_aggregation_runs.realm_id = current_setting(''app.realm_id'', true)';
   BEGIN EXECUTE format('CREATE POLICY %I ON %I FOR SELECT USING (%s)', 'brar_read', 'billing_ratings_aggregation_runs', expr); EXCEPTION WHEN duplicate_object THEN NULL; END;
   BEGIN EXECUTE format('CREATE POLICY %I ON %I FOR INSERT WITH CHECK (%s)', 'brar_insert', 'billing_ratings_aggregation_runs', expr); EXCEPTION WHEN duplicate_object THEN NULL; END;
@@ -1810,6 +1950,7 @@ CREATE TABLE IF NOT EXISTS billing_rating_allocations (
   direction              billing_direction NOT NULL DEFAULT 'debit',
 
   -- denormalized fields for fast scanning/grouping
+  billing_user_id         uuid        NOT NULL,
   billing_account_id      uuid        NOT NULL,
   budget_id               uuid        NULL,
   feature_code            text        NOT NULL,
@@ -1871,7 +2012,11 @@ CREATE TABLE IF NOT EXISTS billing_rating_allocations (
   updated_at              timestamptz NOT NULL DEFAULT now(),
 
   -- idempotency/uniqueness: one row per (rating x funding source x split)
-  UNIQUE (rating_id, grant_id, funding_kind, alloc_seq)
+  UNIQUE (rating_id, grant_id, funding_kind, alloc_seq),
+  CONSTRAINT fk_bra_user_account
+    FOREIGN KEY (billing_user_id, billing_account_id)
+    REFERENCES billing_users(billing_user_id, billing_account_id)
+    ON DELETE CASCADE
 );
 
 -- task-queue / scanning indexes (retain originals and add grant-focused ones)
@@ -1881,6 +2026,10 @@ CREATE INDEX IF NOT EXISTS idx_bra_unsettled_by_scope
 
 CREATE INDEX IF NOT EXISTS idx_bra_unsettled_bacct
   ON billing_rating_allocations (billing_account_id, settlement_state, rated_at)
+  WHERE settlement_state <> 'settled';
+
+CREATE INDEX IF NOT EXISTS idx_bra_unsettled_buser
+  ON billing_rating_allocations (billing_user_id, settlement_state, rated_at)
   WHERE settlement_state <> 'settled';
 
 CREATE INDEX IF NOT EXISTS idx_bra_unsettled_budget
@@ -1933,11 +2082,11 @@ DO $$
 DECLARE
   expr text;
 BEGIN
-  -- Compatibility: keep the generic *_acct_* policies that previously lived in gating init.
-  -- These are redundant with the br_*/brr_*/bra_* policies but preserve behavior for fresh installs.
+  -- Runtime rating tables are scoped by billing_user_id; billing_account_id is retained for payor reports.
   BEGIN EXECUTE 'ALTER TABLE billing_ratings ENABLE ROW LEVEL SECURITY'; EXCEPTION WHEN others THEN NULL; END;
   expr := $policy$
-    billing_account_id = get_current_billing_account_id()
+    billing_user_id = get_current_billing_user_id()
+    AND billing_account_id = get_current_billing_account_id()
     AND EXISTS (
       SELECT 1
       FROM billing_accounts ba
@@ -1957,7 +2106,8 @@ BEGIN
 
   BEGIN EXECUTE 'ALTER TABLE billing_rating_allocations ENABLE ROW LEVEL SECURITY'; EXCEPTION WHEN others THEN NULL; END;
   expr := $policy$
-    billing_account_id = get_current_billing_account_id()
+    billing_user_id = get_current_billing_user_id()
+    AND billing_account_id = get_current_billing_account_id()
     AND EXISTS (
       SELECT 1
       FROM billing_accounts ba
@@ -1977,7 +2127,8 @@ BEGIN
 
   -- billing_ratings (header)
   BEGIN EXECUTE 'ALTER TABLE billing_ratings ENABLE ROW LEVEL SECURITY'; EXCEPTION WHEN others THEN NULL; END;
-  expr := 'billing_ratings.billing_account_id = get_current_billing_account_id()
+  expr := 'billing_ratings.billing_user_id = get_current_billing_user_id()
+           AND billing_ratings.billing_account_id = get_current_billing_account_id()
            AND billing_ratings.realm_id = current_setting(''app.realm_id'', true)';
 
   BEGIN EXECUTE format('CREATE POLICY br_read ON billing_ratings FOR SELECT USING (%s)', expr);
@@ -2005,6 +2156,7 @@ BEGIN
       SELECT 1
       FROM billing_ratings r
       WHERE r.rating_id = billing_rated_records.rating_id
+        AND r.billing_user_id = get_current_billing_user_id()
         AND r.billing_account_id = get_current_billing_account_id()
         AND r.realm_id = current_setting('app.realm_id', true)
     )
@@ -2042,6 +2194,7 @@ BEGIN
       SELECT 1
       FROM billing_ratings r
       WHERE r.rating_id = billing_rating_labels.rating_id
+        AND r.billing_user_id = get_current_billing_user_id()
         AND r.billing_account_id = get_current_billing_account_id()
         AND r.realm_id = current_setting('app.realm_id', true)
     )
@@ -2058,7 +2211,8 @@ BEGIN
 
   -- billing_rating_allocations (per-grant allocations)
   BEGIN EXECUTE 'ALTER TABLE billing_rating_allocations ENABLE ROW LEVEL SECURITY'; EXCEPTION WHEN others THEN NULL; END;
-  expr := 'billing_rating_allocations.billing_account_id = get_current_billing_account_id()
+  expr := 'billing_rating_allocations.billing_user_id = get_current_billing_user_id()
+           AND billing_rating_allocations.billing_account_id = get_current_billing_account_id()
            AND billing_rating_allocations.realm_id = current_setting(''app.realm_id'', true)';
 
   BEGIN EXECUTE format('CREATE POLICY bra_read ON billing_rating_allocations FOR SELECT USING (%s)', expr);
@@ -2120,7 +2274,7 @@ CREATE POLICY gc_del ON grant_campaigns
   FOR DELETE
   USING (realm_id = current_setting('app.realm_id', true));
 
--- grant_assignments — account-scoped with realm guard
+-- grant_assignments — runtime user scoped with realm guard
 ALTER TABLE grant_assignments ENABLE ROW LEVEL SECURITY;
 
 CREATE POLICY ga_read ON grant_assignments
@@ -2131,6 +2285,7 @@ CREATE POLICY ga_read ON grant_assignments
       FROM billing_accounts ba
       WHERE ba.billing_account_id = grant_assignments.billing_account_id
         AND ba.billing_account_id = get_current_billing_account_id()
+        AND grant_assignments.billing_user_id = get_current_billing_user_id()
         AND ba.realm_id = current_setting('app.realm_id', true)
     )
   );
@@ -2155,6 +2310,7 @@ CREATE POLICY ga_ins ON grant_assignments
       FROM billing_accounts ba
       WHERE ba.billing_account_id = grant_assignments.billing_account_id
         AND ba.billing_account_id = get_current_billing_account_id()
+        AND grant_assignments.billing_user_id = get_current_billing_user_id()
         AND ba.realm_id = current_setting('app.realm_id', true)
     )
   );
@@ -2179,6 +2335,7 @@ CREATE POLICY ga_upd ON grant_assignments
       FROM billing_accounts ba
       WHERE ba.billing_account_id = grant_assignments.billing_account_id
         AND ba.billing_account_id = get_current_billing_account_id()
+        AND grant_assignments.billing_user_id = get_current_billing_user_id()
         AND ba.realm_id = current_setting('app.realm_id', true)
     )
   )
@@ -2188,6 +2345,7 @@ CREATE POLICY ga_upd ON grant_assignments
       FROM billing_accounts ba
       WHERE ba.billing_account_id = grant_assignments.billing_account_id
         AND ba.billing_account_id = get_current_billing_account_id()
+        AND grant_assignments.billing_user_id = get_current_billing_user_id()
         AND ba.realm_id = current_setting('app.realm_id', true)
     )
   );
@@ -2221,6 +2379,7 @@ CREATE POLICY ga_del ON grant_assignments
       FROM billing_accounts ba
       WHERE ba.billing_account_id = grant_assignments.billing_account_id
         AND ba.billing_account_id = get_current_billing_account_id()
+        AND grant_assignments.billing_user_id = get_current_billing_user_id()
         AND ba.realm_id = current_setting('app.realm_id', true)
     )
   );
@@ -2237,7 +2396,7 @@ CREATE POLICY ga_realm_admin_del ON grant_assignments
     )
   );
 
--- ledger_grants — account-scoped with realm guard
+-- ledger_grants — runtime user scoped with realm guard
 ALTER TABLE ledger_grants ENABLE ROW LEVEL SECURITY;
 
 CREATE POLICY lg_read ON ledger_grants
@@ -2248,6 +2407,7 @@ CREATE POLICY lg_read ON ledger_grants
       FROM billing_accounts ba
       WHERE ba.billing_account_id = ledger_grants.billing_account_id
         AND ba.billing_account_id = get_current_billing_account_id()
+        AND ledger_grants.billing_user_id = get_current_billing_user_id()
         AND ba.realm_id = current_setting('app.realm_id', true)
     )
   );
@@ -2272,6 +2432,7 @@ CREATE POLICY lg_ins ON ledger_grants
       FROM billing_accounts ba
       WHERE ba.billing_account_id = ledger_grants.billing_account_id
         AND ba.billing_account_id = get_current_billing_account_id()
+        AND ledger_grants.billing_user_id = get_current_billing_user_id()
         AND ba.realm_id = current_setting('app.realm_id', true)
     )
   );
@@ -2284,6 +2445,7 @@ CREATE POLICY lg_upd ON ledger_grants
       FROM billing_accounts ba
       WHERE ba.billing_account_id = ledger_grants.billing_account_id
         AND ba.billing_account_id = get_current_billing_account_id()
+        AND ledger_grants.billing_user_id = get_current_billing_user_id()
         AND ba.realm_id = current_setting('app.realm_id', true)
     )
   )
@@ -2293,6 +2455,7 @@ CREATE POLICY lg_upd ON ledger_grants
       FROM billing_accounts ba
       WHERE ba.billing_account_id = ledger_grants.billing_account_id
         AND ba.billing_account_id = get_current_billing_account_id()
+        AND ledger_grants.billing_user_id = get_current_billing_user_id()
         AND ba.realm_id = current_setting('app.realm_id', true)
     )
   );
@@ -2326,6 +2489,7 @@ CREATE POLICY lg_del ON ledger_grants
       FROM billing_accounts ba
       WHERE ba.billing_account_id = ledger_grants.billing_account_id
         AND ba.billing_account_id = get_current_billing_account_id()
+        AND ledger_grants.billing_user_id = get_current_billing_user_id()
         AND ba.realm_id = current_setting('app.realm_id', true)
     )
   );

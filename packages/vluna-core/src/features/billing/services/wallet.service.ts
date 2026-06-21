@@ -32,6 +32,7 @@ export class WalletService {
   constructor(@Inject(GrantBalanceService) private readonly grantBalanceService: GrantBalanceService) {}
 
   async consume(req: AppRequest, body: WalletConsumeBody): Promise<WalletConsume200> {
+    const billingUserId = this.requireBillingUserId(req)
     const billingAccountId = this.requireBillingAccountId(req)
     const realmId = this.ensureRealm(req)
     const db = this.ensureDb(req)
@@ -44,6 +45,7 @@ export class WalletService {
     const amountXusd = this.toXusd(amountRaw, body?.unit)
 
     const result = await this.applyLedgerDelta(db, {
+      billingUserId,
       billingAccountId,
       realmId,
       deltaXusd: -amountXusd,
@@ -55,6 +57,7 @@ export class WalletService {
 
     const data: BillingComponents['schemas']['WalletConsumeResponse'] = {
       billing_account_id: billingAccountId,
+      billing_user_id: billingUserId,
       unit: 'xusd',
       balance: result.balance.toString(),
       replay: result.replay,
@@ -64,6 +67,7 @@ export class WalletService {
   }
 
   async adjust(req: AppRequest, body: WalletAdjustmentBody): Promise<WalletAdjustment200> {
+    const billingUserId = this.requireBillingUserId(req)
     const billingAccountId = this.requireBillingAccountId(req)
     const realmId = this.ensureRealm(req)
     const db = this.ensureDb(req)
@@ -79,6 +83,7 @@ export class WalletService {
     const sourceRef = body?.origin?.ref ?? body?.request_id ?? null
 
     const result = await this.applyLedgerDelta(db, {
+      billingUserId,
       billingAccountId,
       realmId,
       deltaXusd,
@@ -91,6 +96,7 @@ export class WalletService {
 
     const data: BillingComponents['schemas']['WalletBalanceResponse'] = {
       billing_account_id: billingAccountId,
+      billing_user_id: billingUserId,
       unit: 'xusd',
       balance: result.balance.toString(),
     }
@@ -100,6 +106,7 @@ export class WalletService {
 
   async getWalletBalance(req: AppRequest, q: GetBalanceQuery): Promise<GetBalance200> {
     const allowCrossAccount = allowCrossAccountAccess(req?.ctx)
+    let ctxBu: string | undefined = req?.ctx?.billingUserId
     let ctxBa: string | undefined = req?.ctx?.billingAccountId
     if (!ctxBa && allowCrossAccount) {
       const headerBa = this.getHeader(req.headers, 'x-billing-account-id')
@@ -111,6 +118,9 @@ export class WalletService {
     }
     if (!ctxBa) {
       return errEnvelope('AUTH.INSUFFICIENT_SCOPE', { message: 'billing_account_id mismatch' }) as unknown as GetBalance200
+    }
+    if (!ctxBu) {
+      return errEnvelope('AUTH.INSUFFICIENT_SCOPE', { message: 'billing_user_id mismatch' }) as unknown as GetBalance200
     }
 
     const db = this.ensureDb(req)
@@ -124,9 +134,10 @@ export class WalletService {
 
     const now = new Date()
 
-    const ledgerBalanceXusd = await this.loadLedgerBalance(db, ctxBa)
+    const ledgerBalanceXusd = await this.loadLedgerBalance(db, ctxBu, ctxBa)
 
     const grantBalances = await this.grantBalanceService.getAccountGrantBalances(db, {
+      billingUserId: ctxBu,
       billingAccountId: ctxBa,
       asOf: now,
       includeExpired: false,
@@ -186,6 +197,7 @@ export class WalletService {
 
     const data: BillingComponents['schemas']['WalletBalanceWithBreakdownResponse'] = {
       billing_account_id: ctxBa,
+      billing_user_id: ctxBu,
       balances,
       outstanding_balances: outstandingBalances,
       conversion: {
@@ -209,6 +221,7 @@ export class WalletService {
 
   private async materializeLazyGrants(db: Kysely<Database>, req: AppRequest): Promise<void> {
     const realmId = this.ensureRealm(req)
+    const billingUserId = this.requireBillingUserId(req)
     const billingAccountId = this.requireBillingAccountId(req)
     const now = new Date()
     await runInTransaction(db, async (trx) => {
@@ -224,6 +237,7 @@ export class WalletService {
           'ga.window_end',
           'ga.metadata',
         ])
+        .where('ga.billing_user_id', '=', billingUserId)
         .where('ga.billing_account_id', '=', billingAccountId)
         .where('ga.status', '=', 'active')
         .where('gp.issuance_mode', '=', 'lazy')
@@ -242,17 +256,19 @@ export class WalletService {
         programMap.set(String(p.program_id), p)
       }
 
-      await setRlsSession(trx, { realmId, billingAccountId, isRealmAdmin: false })
+      await setRlsSession(trx, { realmId, billingAccountId, billingUserId, isRealmAdmin: false })
 
       for (const binding of bindings) {
         const program = programMap.get(String(binding.program_id))
         if (!program) continue
         await issueGrantForAssignment(trx, {
           realmId,
+          billingUserId,
           billingAccountId,
           program: program as GrantProgramRow,
           assignment: {
             assignment_id: String(binding.assignment_id),
+            billing_user_id: billingUserId,
             billing_account_id: billingAccountId,
             program_id: String(binding.program_id),
             billing_plan_assignment_id: null,
@@ -299,6 +315,14 @@ export class WalletService {
       throw new HttpException({ code: 'VALIDATION.INVALID_INPUT', message: 'billing_account_id is required' }, 422)
     }
     return billingAccountId
+  }
+
+  private requireBillingUserId(req: AppRequest): string {
+    const billingUserId = req?.ctx?.billingUserId
+    if (!billingUserId) {
+      throw new HttpException({ code: 'VALIDATION.INVALID_INPUT', message: 'billing_user_id is required' }, 422)
+    }
+    return billingUserId
   }
 
   private ensureIdempotencyKey(req: AppRequest): string {
@@ -361,6 +385,7 @@ export class WalletService {
   private async applyLedgerDelta(
     db: Kysely<Database>,
     params: {
+      billingUserId: string
       billingAccountId: string
       realmId: string
       deltaXusd: bigint
@@ -372,7 +397,7 @@ export class WalletService {
     },
   ): Promise<{ balance: bigint; replay: boolean }> {
     return runInTransaction(db, async (trx) => {
-      const ledger = await getOrCreateLedgerAccount(trx, params.billingAccountId, WALLET_LEDGER_CURRENCY)
+      const ledger = await getOrCreateLedgerAccount(trx, params.billingUserId, params.billingAccountId, WALLET_LEDGER_CURRENCY)
 
       const existing = await trx
         .selectFrom('ledger_entries')
@@ -404,6 +429,7 @@ export class WalletService {
         .insertInto('ledger_entries')
         .values({
           ledger_id: ledger.ledger_id,
+          billing_user_id: params.billingUserId,
           billing_account_id: params.billingAccountId,
           amount_xusd: amountText,
           reason: params.reason,
@@ -445,6 +471,7 @@ export class WalletService {
 
       await this.upsertCashGrant(trx, {
         realmId: params.realmId,
+        billingUserId: params.billingUserId,
         billingAccountId: params.billingAccountId,
         deltaXusd: params.deltaXusd,
       })
@@ -455,12 +482,12 @@ export class WalletService {
 
   private async upsertCashGrant(
     trx: Kysely<Database>,
-    params: { realmId: string; billingAccountId: string; deltaXusd: bigint },
+    params: { realmId: string; billingUserId: string; billingAccountId: string; deltaXusd: bigint },
   ): Promise<void> {
     // Wallet Cash Grant (kind='cash', source_kind='wallet.cash')
     // Purpose: a wallet-side "balance anchor" so the grants/balance view can reflect ledger_accounts.balance_xusd.
     // This is NOT the same as Gate's fallback/overage bucket; do not reuse it to represent unpaid overages.
-    const grant = await this.ensureWalletCashGrant(trx, params.realmId, params.billingAccountId)
+    const grant = await this.ensureWalletCashGrant(trx, params.realmId, params.billingUserId, params.billingAccountId)
     await this.applyGrantDelta(trx, grant, params.deltaXusd)
   }
 
@@ -499,6 +526,7 @@ export class WalletService {
   private async ensureWalletCashGrant(
     trx: Kysely<Database>,
     realmId: string,
+    billingUserId: string,
     billingAccountId: string,
   ): Promise<{ grant_id: string; amount_xusd: unknown; posted_consumed_xusd: unknown }> {
     // Ensures the per-account wallet cash grant exists. We keep it "evergreen" (no period_start/period_end)
@@ -506,6 +534,7 @@ export class WalletService {
     const existing = await trx
       .selectFrom('ledger_grants')
       .select(['grant_id', 'amount_xusd', 'posted_consumed_xusd'])
+      .where('billing_user_id', '=', billingUserId)
       .where('billing_account_id', '=', billingAccountId)
       .where('kind', '=', 'cash')
       .where('source_kind', '=', 'wallet.cash')
@@ -553,6 +582,7 @@ export class WalletService {
     const assignment = await trx
       .insertInto('grant_assignments')
       .values({
+        billing_user_id: billingUserId,
         billing_account_id: billingAccountId,
         program_id: programId,
         source_kind: 'wallet.cash',
@@ -566,7 +596,7 @@ export class WalletService {
       })
       .onConflict((oc) =>
         oc
-          .columns(['billing_account_id', 'source_kind', 'source_ref', 'program_id'])
+          .columns(['billing_user_id', 'source_kind', 'source_ref', 'program_id'])
           .doUpdateSet({
             status: sql`excluded.status`,
             metadata: sql`excluded.metadata`,
@@ -580,6 +610,7 @@ export class WalletService {
       ?? (await trx
         .selectFrom('grant_assignments')
         .select(['assignment_id'])
+        .where('billing_user_id', '=', billingUserId)
         .where('billing_account_id', '=', billingAccountId)
         .where('program_id', '=', programId)
         .where('source_kind', '=', 'wallet.cash')
@@ -592,6 +623,7 @@ export class WalletService {
     const grant = await trx
       .insertInto('ledger_grants')
       .values({
+        billing_user_id: billingUserId,
         billing_account_id: billingAccountId,
         assignment_id: assignmentId,
         program_id: programId,
@@ -624,6 +656,7 @@ export class WalletService {
       (await trx
         .selectFrom('ledger_grants')
         .select(['grant_id', 'amount_xusd', 'posted_consumed_xusd'])
+        .where('billing_user_id', '=', billingUserId)
         .where('billing_account_id', '=', billingAccountId)
         .where('assignment_id', '=', assignmentId)
         .where('kind', '=', 'cash')
@@ -634,10 +667,11 @@ export class WalletService {
     return grantRow as { grant_id: string; amount_xusd: unknown; posted_consumed_xusd: unknown }
   }
 
-  private async loadLedgerBalance(trx: Kysely<Database>, billingAccountId: string): Promise<bigint> {
+  private async loadLedgerBalance(trx: Kysely<Database>, billingUserId: string, billingAccountId: string): Promise<bigint> {
     const row = await trx
       .selectFrom('ledger_accounts')
       .select(['balance_xusd'])
+      .where('billing_user_id', '=', billingUserId)
       .where('billing_account_id', '=', billingAccountId)
       .where('currency_code', '=', WALLET_LEDGER_CURRENCY)
       .executeTakeFirst()

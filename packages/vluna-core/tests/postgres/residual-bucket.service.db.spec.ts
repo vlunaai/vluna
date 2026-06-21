@@ -7,6 +7,7 @@ import { prepareDbTestContext } from '../utils/db-setup.js'
 const FIXTURE = path.resolve(__dirname, 'fixtures/residual_buckets.sql')
 const realmId = 'realm-test'
 const billingAccountId = 'ba-test'
+const billingUserId = 'bu-test'
 
 describe('Residual bucket persistence (db)', { tags: ['db'] }, () => {
   let stop: () => Promise<void>
@@ -33,11 +34,12 @@ describe('Residual bucket persistence (db)', { tags: ['db'] }, () => {
     if (skipped) return
     await withDatabaseConnection(process.env.DATABASE_URI!, async () =>
       db().transaction().execute(async (trx) => {
-        await setRlsSession(trx, { realmId, billingAccountId })
+        await setRlsSession(trx, { realmId, billingUserId, billingAccountId })
         // seed a bucket with denom=5, rounding=nearest
         await trx
           .insertInto('gate_residual_buckets')
           .values({
+            billing_user_id: billingUserId,
             billing_account_id: billingAccountId,
             meter_code: 'm1',
             pricing_fingerprint: 'pf1',
@@ -48,6 +50,7 @@ describe('Residual bucket persistence (db)', { tags: ['db'] }, () => {
           .execute()
 
         const remainder = await svc.loadResidualBucketRemainder(trx, {
+          billingUserId,
           billingAccountId,
           meterCode: 'm1',
           pricingIdentity: 'pf1',
@@ -63,9 +66,10 @@ describe('Residual bucket persistence (db)', { tags: ['db'] }, () => {
     if (skipped) return
     await withDatabaseConnection(process.env.DATABASE_URI!, async () =>
       db().transaction().execute(async (trx) => {
-        await setRlsSession(trx, { realmId, billingAccountId })
+        await setRlsSession(trx, { realmId, billingUserId, billingAccountId })
 
         await svc.upsertResidualBucket(trx, {
+          billingUserId,
           billingAccountId,
           meterCode: 'm2',
           pricingIdentity: 'pf2',
@@ -76,6 +80,7 @@ describe('Residual bucket persistence (db)', { tags: ['db'] }, () => {
         })
 
         const remainder = await svc.loadResidualBucketRemainder(trx, {
+          billingUserId,
           billingAccountId,
           meterCode: 'm2',
           pricingIdentity: 'pf2',

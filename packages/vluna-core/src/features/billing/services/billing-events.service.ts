@@ -6,6 +6,7 @@ import type { ErrorCode } from '../../../contracts/error-codes.js'
 import { runInTransaction } from '../../gate/services/gate.utils.js'
 
 type BillingEventPayload = BillingComponents['schemas']['BillingEventIngestRequest'] & {
+  billing_user_id: string
   billing_account_id: string
 }
 
@@ -49,6 +50,7 @@ export class BillingEventsService {
     if (!db) throw new BillingEventsError(500, 'SERVER.CONFIG', 'database unavailable')
     if (!realmId) throw new BillingEventsError(500, 'SERVER.CONFIG', 'realm unavailable')
 
+    const billingUserId = normalizeBillingAccountId(payload.billing_user_id)
     const billingAccountId = normalizeBillingAccountId(payload.billing_account_id)
     const semanticKind = normalizeEventSemanticKind(payload.semantic_kind)
     const occurredAt = normalizeTimestamp(payload.occurred_at)
@@ -58,6 +60,7 @@ export class BillingEventsService {
 
     const requestHash = computeRequestHash({
       billing_account_id: billingAccountId,
+      billing_user_id: billingUserId,
       semantic_kind: semanticKind,
       event_type: eventType,
       occurred_at: occurredAt,
@@ -67,6 +70,7 @@ export class BillingEventsService {
 
     const insertValues = {
       realm_id: realmId,
+      billing_user_id: billingUserId,
       billing_account_id: billingAccountId,
       semantic_kind: semanticKind,
       occurred_at: occurredAt,
@@ -79,15 +83,16 @@ export class BillingEventsService {
     const inserted = await db
       .insertInto('billing_events')
       .values(insertValues)
-      .onConflict((oc) => oc.columns(['billing_account_id', 'request_hash']).doNothing())
-      .returning(['event_id', 'realm_id', 'billing_account_id', 'semantic_kind', 'occurred_at', 'event_type', 'subject_ref', 'payload', 'request_hash', 'created_at'])
+      .onConflict((oc) => oc.columns(['billing_user_id', 'request_hash']).doNothing())
+      .returning(['event_id', 'realm_id', 'billing_user_id', 'billing_account_id', 'semantic_kind', 'occurred_at', 'event_type', 'subject_ref', 'payload', 'request_hash', 'created_at'])
       .executeTakeFirst()
 
     const eventRow: BillingEventRow = inserted
       ? inserted
           : await db
           .selectFrom('billing_events')
-          .select(['event_id', 'realm_id', 'billing_account_id', 'semantic_kind', 'occurred_at', 'event_type', 'subject_ref', 'payload', 'request_hash', 'created_at'])
+          .select(['event_id', 'realm_id', 'billing_user_id', 'billing_account_id', 'semantic_kind', 'occurred_at', 'event_type', 'subject_ref', 'payload', 'request_hash', 'created_at'])
+          .where('billing_user_id', '=', billingUserId)
           .where('billing_account_id', '=', billingAccountId)
           .where('request_hash', '=', requestHash)
           .executeTakeFirstOrThrow(() =>
@@ -123,6 +128,7 @@ export class BillingEventsService {
 
     type NormalizedBatchItem = {
       index: number
+      billingUserId: string
       billingAccountId: string
       semanticKind: 'activity' | 'outcome'
       occurredAt: Date
@@ -139,6 +145,7 @@ export class BillingEventsService {
 
     for (const item of items) {
       try {
+        const billingUserId = normalizeBillingAccountId(item.payload.billing_user_id)
         const billingAccountId = normalizeBillingAccountId(item.payload.billing_account_id)
         const semanticKind = normalizeEventSemanticKind(item.payload.semantic_kind)
         const occurredAt = normalizeTimestamp(item.payload.occurred_at)
@@ -147,6 +154,7 @@ export class BillingEventsService {
         const payloadObj = normalizePayload(item.payload.payload)
         normalized.push({
           index: item.index,
+          billingUserId,
           billingAccountId,
           semanticKind,
           occurredAt,
@@ -183,6 +191,7 @@ export class BillingEventsService {
         try {
           const requestHash = computeRequestHash({
             billing_account_id: item.billingAccountId,
+            billing_user_id: item.billingUserId,
             semantic_kind: item.semanticKind,
             event_type: item.eventType,
             occurred_at: item.occurredAt,
@@ -192,6 +201,7 @@ export class BillingEventsService {
 
           const insertValues = {
             realm_id: realmId,
+            billing_user_id: item.billingUserId,
             billing_account_id: item.billingAccountId,
             semantic_kind: item.semanticKind,
             occurred_at: item.occurredAt,
@@ -204,15 +214,16 @@ export class BillingEventsService {
           const inserted = await trx
             .insertInto('billing_events')
             .values(insertValues)
-            .onConflict((oc) => oc.columns(['billing_account_id', 'request_hash']).doNothing())
-            .returning(['event_id', 'realm_id', 'billing_account_id', 'semantic_kind', 'occurred_at', 'event_type', 'subject_ref', 'payload', 'request_hash', 'created_at'])
+            .onConflict((oc) => oc.columns(['billing_user_id', 'request_hash']).doNothing())
+            .returning(['event_id', 'realm_id', 'billing_user_id', 'billing_account_id', 'semantic_kind', 'occurred_at', 'event_type', 'subject_ref', 'payload', 'request_hash', 'created_at'])
             .executeTakeFirst()
 
           const eventRow: BillingEventRow = inserted
             ? inserted
             : await trx
                 .selectFrom('billing_events')
-                .select(['event_id', 'realm_id', 'billing_account_id', 'semantic_kind', 'occurred_at', 'event_type', 'subject_ref', 'payload', 'request_hash', 'created_at'])
+                .select(['event_id', 'realm_id', 'billing_user_id', 'billing_account_id', 'semantic_kind', 'occurred_at', 'event_type', 'subject_ref', 'payload', 'request_hash', 'created_at'])
+                .where('billing_user_id', '=', item.billingUserId)
                 .where('billing_account_id', '=', item.billingAccountId)
                 .where('request_hash', '=', requestHash)
                 .executeTakeFirstOrThrow(() =>
@@ -321,6 +332,7 @@ function stableStringify(value: unknown): string {
 }
 
 function computeRequestHash(input: {
+  billing_user_id: string
   billing_account_id: string
   semantic_kind: 'activity' | 'outcome'
   event_type: string
@@ -329,6 +341,7 @@ function computeRequestHash(input: {
   payload: Record<string, unknown>
 }): string {
   const canonical = stableStringify({
+    billing_user_id: input.billing_user_id,
     billing_account_id: input.billing_account_id,
     semantic_kind: input.semantic_kind,
     event_type: input.event_type,

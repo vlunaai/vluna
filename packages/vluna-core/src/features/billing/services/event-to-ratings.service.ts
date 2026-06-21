@@ -304,7 +304,7 @@ export class EventToRatingsService {
 
   async enqueueEvent(
     db: Kysely<Database> | Transaction<Database>,
-    ctx: { realmId: string; billingAccountId: string; eventId: string },
+    ctx: { realmId: string; billingUserId: string; billingAccountId: string; eventId: string },
     opts?: { policyId?: string; policyVersion?: string; now?: Date },
   ): Promise<void> {
     const now = opts?.now ?? new Date()
@@ -312,12 +312,13 @@ export class EventToRatingsService {
     const policyVersion = opts?.policyVersion ?? PROCESSING_POLICY_VERSION
 
     await runInTransaction(db, async (trx) => {
-      await setRlsSession(trx, { realmId: ctx.realmId, billingAccountId: ctx.billingAccountId })
+      await setRlsSession(trx, { realmId: ctx.realmId, billingAccountId: ctx.billingAccountId, billingUserId: ctx.billingUserId })
       await trx
         .insertInto('billing_event_processing')
         .values({
           billing_event_id: ctx.eventId,
           realm_id: ctx.realmId,
+          billing_user_id: ctx.billingUserId,
           billing_account_id: ctx.billingAccountId,
           policy_id: policyId,
           policy_version: policyVersion,
@@ -334,7 +335,7 @@ export class EventToRatingsService {
 
   async processSingleEvent(
     db: Kysely<Database> | Transaction<Database>,
-    ctx: { realmId: string; billingAccountId: string; eventId: string },
+    ctx: { realmId: string; billingUserId: string; billingAccountId: string; eventId: string },
     opts?: {
       lockOwner?: string
       lockTimeoutMs?: number
@@ -359,13 +360,14 @@ export class EventToRatingsService {
     const maxAttempts = opts?.maxAttempts ?? DEFAULT_MAX_ATTEMPTS
 
     return runInTransaction(db, async (trx) => {
-      await setRlsSession(trx, { realmId: ctx.realmId, billingAccountId: ctx.billingAccountId })
+      await setRlsSession(trx, { realmId: ctx.realmId, billingAccountId: ctx.billingAccountId, billingUserId: ctx.billingUserId })
 
       await trx
         .insertInto('billing_event_processing')
         .values({
           billing_event_id: ctx.eventId,
           realm_id: ctx.realmId,
+          billing_user_id: ctx.billingUserId,
           billing_account_id: ctx.billingAccountId,
           policy_id: queuePolicyId,
           policy_version: queuePolicyVersion,
@@ -391,6 +393,7 @@ export class EventToRatingsService {
         })
         .where('billing_event_id', '=', ctx.eventId)
         .where('realm_id', '=', ctx.realmId)
+        .where('billing_user_id', '=', ctx.billingUserId)
         .where('billing_account_id', '=', ctx.billingAccountId)
         .where('policy_id', '=', queuePolicyId)
         .where('policy_version', '=', queuePolicyVersion)
@@ -420,6 +423,7 @@ export class EventToRatingsService {
           })
           .where('billing_event_id', '=', ctx.eventId)
           .where('realm_id', '=', ctx.realmId)
+          .where('billing_user_id', '=', ctx.billingUserId)
           .where('billing_account_id', '=', ctx.billingAccountId)
           .where('policy_id', '=', queuePolicyId)
           .where('policy_version', '=', queuePolicyVersion)
@@ -429,8 +433,9 @@ export class EventToRatingsService {
 
       const eventRow = await trx
         .selectFrom('billing_events')
-        .select(['event_id', 'billing_account_id', 'semantic_kind', 'occurred_at', 'event_type', 'subject_ref', 'payload'])
+        .select(['event_id', 'billing_user_id', 'billing_account_id', 'semantic_kind', 'occurred_at', 'event_type', 'subject_ref', 'payload'])
         .where('event_id', '=', ctx.eventId)
+        .where('billing_user_id', '=', ctx.billingUserId)
         .where('billing_account_id', '=', ctx.billingAccountId)
         .executeTakeFirst()
 
@@ -447,6 +452,7 @@ export class EventToRatingsService {
           })
           .where('billing_event_id', '=', ctx.eventId)
           .where('realm_id', '=', ctx.realmId)
+          .where('billing_user_id', '=', ctx.billingUserId)
           .where('billing_account_id', '=', ctx.billingAccountId)
           .where('policy_id', '=', queuePolicyId)
           .where('policy_version', '=', queuePolicyVersion)
@@ -467,6 +473,7 @@ export class EventToRatingsService {
           })
           .where('billing_event_id', '=', ctx.eventId)
           .where('realm_id', '=', ctx.realmId)
+          .where('billing_user_id', '=', ctx.billingUserId)
           .where('billing_account_id', '=', ctx.billingAccountId)
           .where('policy_id', '=', queuePolicyId)
           .where('policy_version', '=', queuePolicyVersion)
@@ -602,6 +609,7 @@ export class EventToRatingsService {
           })
           .where('billing_event_id', '=', ctx.eventId)
           .where('realm_id', '=', ctx.realmId)
+          .where('billing_user_id', '=', ctx.billingUserId)
           .where('billing_account_id', '=', ctx.billingAccountId)
           .where('policy_id', '=', queuePolicyId)
           .where('policy_version', '=', queuePolicyVersion)
@@ -630,6 +638,7 @@ export class EventToRatingsService {
             })
             .where('billing_event_id', '=', ctx.eventId)
             .where('realm_id', '=', ctx.realmId)
+          .where('billing_user_id', '=', ctx.billingUserId)
             .where('billing_account_id', '=', ctx.billingAccountId)
             .where('policy_id', '=', queuePolicyId)
             .where('policy_version', '=', queuePolicyVersion)
@@ -647,6 +656,7 @@ export class EventToRatingsService {
           })
           .where('billing_event_id', '=', ctx.eventId)
           .where('realm_id', '=', ctx.realmId)
+          .where('billing_user_id', '=', ctx.billingUserId)
           .where('billing_account_id', '=', ctx.billingAccountId)
           .where('policy_id', '=', queuePolicyId)
           .where('policy_version', '=', queuePolicyVersion)
@@ -683,6 +693,7 @@ export class EventToRatingsService {
           })
           .where('billing_event_id', '=', ctx.eventId)
           .where('realm_id', '=', ctx.realmId)
+          .where('billing_user_id', '=', ctx.billingUserId)
           .where('billing_account_id', '=', ctx.billingAccountId)
           .where('policy_id', '=', queuePolicyId)
           .where('policy_version', '=', queuePolicyVersion)
@@ -708,6 +719,7 @@ export class EventToRatingsService {
           })
           .where('billing_event_id', '=', ctx.eventId)
           .where('realm_id', '=', ctx.realmId)
+          .where('billing_user_id', '=', ctx.billingUserId)
           .where('billing_account_id', '=', ctx.billingAccountId)
           .where('policy_id', '=', queuePolicyId)
           .where('policy_version', '=', queuePolicyVersion)
@@ -731,6 +743,7 @@ export class EventToRatingsService {
           })
           .where('billing_event_id', '=', ctx.eventId)
           .where('realm_id', '=', ctx.realmId)
+          .where('billing_user_id', '=', ctx.billingUserId)
           .where('billing_account_id', '=', ctx.billingAccountId)
           .where('policy_id', '=', queuePolicyId)
           .where('policy_version', '=', queuePolicyVersion)
@@ -760,7 +773,7 @@ export class EventToRatingsService {
           }
           const { response } = await this.gateService.ingestInternal(
             trx,
-            { realmId: ctx.realmId, billingAccountId: ctx.billingAccountId },
+            { realmId: ctx.realmId, billingUserId: ctx.billingUserId, billingAccountId: ctx.billingAccountId },
             ingestBody,
             idempotencyKey,
             expectedMeterSemanticKind,
@@ -776,6 +789,7 @@ export class EventToRatingsService {
             .insertInto('billing_event_ratings')
             .values({
               realm_id: ctx.realmId,
+              billing_user_id: ctx.billingUserId,
               billing_account_id: ctx.billingAccountId,
               billing_event_id: ctx.eventId,
               rating_id: ratingId,
@@ -811,6 +825,7 @@ export class EventToRatingsService {
           })
           .where('billing_event_id', '=', ctx.eventId)
           .where('realm_id', '=', ctx.realmId)
+          .where('billing_user_id', '=', ctx.billingUserId)
           .where('billing_account_id', '=', ctx.billingAccountId)
           .where('policy_id', '=', queuePolicyId)
           .where('policy_version', '=', queuePolicyVersion)
@@ -842,6 +857,7 @@ export class EventToRatingsService {
           })
           .where('billing_event_id', '=', ctx.eventId)
           .where('realm_id', '=', ctx.realmId)
+          .where('billing_user_id', '=', ctx.billingUserId)
           .where('billing_account_id', '=', ctx.billingAccountId)
           .where('policy_id', '=', queuePolicyId)
           .where('policy_version', '=', queuePolicyVersion)
@@ -855,7 +871,7 @@ export class EventToRatingsService {
 
   async processSingleEventIfEnabledFromApi(
     db: Kysely<Database> | Transaction<Database>,
-    ctx: { realmId: string; billingAccountId: string; eventId: string },
+    ctx: { realmId: string; billingUserId: string; billingAccountId: string; eventId: string },
   ): Promise<void> {
     // if (!envFlag('VLUNA_GATE_ENABLE_LEDGER_SYNC')) return
     await this.processSingleEvent(db, ctx, { lockOwner: 'events-api', expectedMeterSemanticKind: 'outcome' })
@@ -879,7 +895,7 @@ export class EventToRatingsService {
 
       const candidates = await trx
         .selectFrom('billing_event_processing')
-        .select(['billing_event_id', 'billing_account_id'])
+        .select(['billing_event_id', 'billing_user_id', 'billing_account_id'])
         .where('realm_id', '=', ctx.realmId)
         .where('policy_id', '=', POLICY_ID)
         .where('policy_version', '=', PROCESSING_POLICY_VERSION)
@@ -897,6 +913,7 @@ export class EventToRatingsService {
           trx,
           {
             realmId: ctx.realmId,
+            billingUserId: String(row.billing_user_id),
             billingAccountId: String(row.billing_account_id),
             eventId: String(row.billing_event_id),
           },
@@ -930,6 +947,7 @@ export class EventToRatingsService {
       }
 
       type GroupRow = {
+        billing_user_id: string
         billing_account_id: string
         contract_id: string | null
         window_start: Date
@@ -941,6 +959,7 @@ export class EventToRatingsService {
       const groupRows = await trx
         .selectFrom('billing_events')
         .select((eb) => [
+          eb.ref('billing_user_id').as('billing_user_id'),
           eb.ref('billing_account_id').as('billing_account_id'),
           sql<string>`(
             select bc.contract_id
@@ -962,6 +981,7 @@ export class EventToRatingsService {
         .where('event_type', 'in', eventTypes)
         .where('occurred_at', '<', windowEndExclusive)
         .groupBy([
+          'billing_user_id',
           'billing_account_id',
           'event_type',
           sql`date_trunc('day', billing_events.occurred_at)`,
@@ -976,6 +996,7 @@ export class EventToRatingsService {
             limit 1
           )`,
         ])
+        .orderBy('billing_user_id', 'asc')
         .orderBy('billing_account_id', 'asc')
         .orderBy(sql`date_trunc('day', billing_events.occurred_at)`, 'asc')
         .orderBy('event_type', 'asc')
@@ -1020,6 +1041,7 @@ export class EventToRatingsService {
           const q = trx
             .selectFrom('billing_events')
             .where('realm_id', '=', ctx.realmId)
+            .where('billing_user_id', '=', String(row.billing_user_id))
             .where('billing_account_id', '=', String(row.billing_account_id))
             .where('semantic_kind', '=', 'outcome')
             .where('event_type', '=', row.event_type)
@@ -1049,6 +1071,7 @@ export class EventToRatingsService {
         const aggregateInput = {
           source_kind: 'aggregate',
           realm_id: ctx.realmId,
+          billing_user_id: String(row.billing_user_id),
           billing_account_id: String(row.billing_account_id),
           semantic_kind: 'outcome',
           event_type: row.event_type,
@@ -1134,11 +1157,11 @@ export class EventToRatingsService {
         const intent = evaluation.intents[0]
 
         const contractId = contractIdOrNull ?? '-'
-        const idem = `agg:${ctx.realmId}:ba:${row.billing_account_id}:ct:${contractId}:day:${dateKey}:g:${groupKey}:policy:${selected.policyId}:v:${String(selected.policyVersion)}`
+        const idem = `agg:${ctx.realmId}:bu:${row.billing_user_id}:ba:${row.billing_account_id}:ct:${contractId}:day:${dateKey}:g:${groupKey}:policy:${selected.policyId}:v:${String(selected.policyVersion)}`
 
         const { response } = await this.gateService.ingestInternal(
           trx,
-          { realmId: ctx.realmId, billingAccountId: String(row.billing_account_id) },
+          { realmId: ctx.realmId, billingUserId: String(row.billing_user_id), billingAccountId: String(row.billing_account_id) },
           {
             feature_code: intent.featureCode,
             occurred_at: row.window_start.toISOString(),
@@ -1164,6 +1187,7 @@ export class EventToRatingsService {
           .insertInto('billing_ratings_aggregation_runs')
           .values({
             realm_id: ctx.realmId,
+            billing_user_id: String(row.billing_user_id),
             billing_account_id: String(row.billing_account_id),
             contract_id: row.contract_id ? String(row.contract_id) : null,
             policy_id: selected.policyId,
@@ -1189,7 +1213,7 @@ export class EventToRatingsService {
           })
           .onConflict((oc) =>
             oc
-              .columns(['realm_id', 'billing_account_id', 'contract_id', 'policy_id', 'policy_version', 'window_start', 'group_key'])
+              .columns(['realm_id', 'billing_user_id', 'contract_id', 'policy_id', 'policy_version', 'window_start', 'group_key'])
               .doNothing(),
           )
           .execute()
@@ -1200,6 +1224,7 @@ export class EventToRatingsService {
           .insertInto('billing_event_ratings')
           .columns([
             'realm_id',
+            'billing_user_id',
             'billing_account_id',
             'billing_event_id',
             'rating_id',
@@ -1216,6 +1241,7 @@ export class EventToRatingsService {
               .selectFrom('billing_events')
               .select([
                 eb.val(ctx.realmId).as('realm_id'),
+                'billing_events.billing_user_id as billing_user_id',
                 'billing_events.billing_account_id as billing_account_id',
                 'billing_events.event_id as billing_event_id',
                 eb.val(ratingId).as('rating_id'),
@@ -1228,6 +1254,7 @@ export class EventToRatingsService {
                 eb.val(now).as('created_at'),
               ])
               .where('billing_events.realm_id', '=', ctx.realmId)
+              .where('billing_events.billing_user_id', '=', String(row.billing_user_id))
               .where('billing_events.billing_account_id', '=', String(row.billing_account_id))
               .where('billing_events.semantic_kind', '=', 'outcome')
               .where('billing_events.event_type', '=', row.event_type)

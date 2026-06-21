@@ -35,6 +35,7 @@ type PolicyRowBase = {
   feature_code: string
   unit: string | null
   kind: string
+  subject_scope: string | null
   window_sec: number | string
   limit_count: unknown
   limit_minor: unknown
@@ -44,120 +45,117 @@ type PolicyRowBase = {
 
 type PolicyStandaloneRow = PolicyRowBase
 
+type GateBundleSource = {
+  bundleId: string
+  assignmentScope: 'account' | 'user' | 'default'
+  allowedSubjectScopes: Array<'account' | 'user'>
+}
+
+type GateBundleCandidate = {
+  bundleKey: string
+  assignmentScope: 'account' | 'user'
+  priority: number
+  assignmentId: string
+  windowEnd: Date | null
+}
+
+type CacheEntry<T> = {
+  value: T
+  expiresAtMs: number
+}
+
+const DEFAULT_GATE_RUNTIME_CACHE_TTL_MS = 5_000
+const GATE_RUNTIME_CACHE_LIMIT = 2_000
+
+const bundleSourceCache = new Map<string, CacheEntry<GateBundleSource[]>>()
+const bundlePolicyCache = new Map<string, CacheEntry<PolicyStandaloneRow[]>>()
+const featureCodeCache = new Map<string, CacheEntry<string[]>>()
+
+export function invalidateGateRuntimeCaches(): void {
+  bundleSourceCache.clear()
+  bundlePolicyCache.clear()
+  featureCodeCache.clear()
+}
+
+function gateRuntimeCacheTtlMs(): number {
+  const raw = process.env.VLUNA_GATE_RUNTIME_CACHE_TTL_MS
+  if (!raw) return DEFAULT_GATE_RUNTIME_CACHE_TTL_MS
+  const parsed = Number(raw)
+  if (!Number.isFinite(parsed) || parsed < 0) return DEFAULT_GATE_RUNTIME_CACHE_TTL_MS
+  return Math.floor(parsed)
+}
+
+function getCached<T>(cache: Map<string, CacheEntry<T>>, key: string, nowMs = Date.now()): T | null {
+  const entry = cache.get(key)
+  if (!entry) return null
+  if (entry.expiresAtMs <= nowMs) {
+    cache.delete(key)
+    return null
+  }
+  return entry.value
+}
+
+function setCached<T>(cache: Map<string, CacheEntry<T>>, key: string, value: T, expiresAtMs: number): void {
+  if (expiresAtMs <= Date.now()) return
+  if (cache.size >= GATE_RUNTIME_CACHE_LIMIT) {
+    cache.clear()
+  }
+  cache.set(key, { value, expiresAtMs })
+}
+
+function cloneBundleSources(sources: GateBundleSource[]): GateBundleSource[] {
+  return sources.map((source) => ({
+    ...source,
+    allowedSubjectScopes: source.allowedSubjectScopes.slice(),
+  }))
+}
+
 @Injectable()
 export class QuotaService {
   async loadActivePolicyWindows(
     db: Kysely<Database>,
     realmId: string,
     billingAccountId: string,
+    billingUserId: string,
     now: Date,
-    opts?: { bundleId?: string | null },
   ): Promise<PolicyWindowView[]> {
-    const bundleIdFromCtx = opts?.bundleId
-
-    const accountRow =
-      typeof bundleIdFromCtx !== 'undefined'
-        ? { billing_account_id: billingAccountId, realm_id: realmId, current_bundle_id: bundleIdFromCtx }
-        : await db
-            .selectFrom('billing_accounts')
-            .select(['billing_account_id', 'realm_id', 'current_bundle_id'])
-            .where('billing_account_id', '=', billingAccountId)
-            .where('realm_id', '=', realmId)
-            .executeTakeFirst()
+    const accountRow = await db
+      .selectFrom('billing_accounts')
+      .select(['billing_account_id', 'realm_id'])
+      .where('billing_account_id', '=', billingAccountId)
+      .where('realm_id', '=', realmId)
+      .executeTakeFirst()
 
     if (!accountRow) {
       throw new HttpException({ code: 'RESOURCE.NOT_FOUND', message: 'billing account not found for bundle resolution' }, 404)
     }
 
-    const bundleRow = accountRow.current_bundle_id
-      ? await db
-          .selectFrom('gate_policy_bundles')
-          .select(['bundle_id', 'status'])
-          .where('bundle_id', '=', accountRow.current_bundle_id)
-          .where('realm_id', '=', realmId)
-          .executeTakeFirst()
-      : null
+    const sources = await this.resolveEffectiveGateBundleSources(db, {
+      realmId,
+      billingAccountId,
+      billingUserId,
+      now,
+    })
 
-    const defaultBundle = await db
-      .selectFrom('gate_policy_bundles')
-      .select(['bundle_id', 'status'])
-      .where('realm_id', '=', realmId)
-      .where('bundle_key', '=', DEFAULT_BUNDLE_KEY)
-      .executeTakeFirst()
-
-    if (!defaultBundle?.bundle_id) {
-      throw new HttpException({ code: 'SERVER.CONFIG', message: 'default bundle not configured for realm' }, 500)
-    }
-    const defaultBundleId = String(defaultBundle.bundle_id)
-
-    let bundleId = bundleRow?.bundle_id ? String(bundleRow.bundle_id) : null
-    if (!bundleId) {
-      bundleId = defaultBundleId
-    }
-
-    const policyRows = await db
-      .selectFrom('gate_policies as p')
-      .innerJoin('gate_policy_bundles as b', 'b.bundle_id', 'p.bundle_id')
-      .select([
-        'p.policy_id as policy_id',
-        'p.name as policy_name',
-        'p.feature_code as feature_code',
-        'p.kind as kind',
-        'p.unit as unit',
-        'p.window_sec as window_sec',
-        'p.limit_count as limit_count',
-        'p.limit_minor as limit_minor',
-        'p.status as status',
-        'p.metadata as policy_metadata',
-      ])
-      .where('p.realm_id', '=', realmId)
-      .where('p.bundle_id', '=', bundleId)
-      .where('p.kind', '<>', 'seats')
-      .where('p.status', '<>', 'disabled')
-      .where('b.status', '=', 'active')
-      .execute()
-
-    const fallbackWildcardRows =
-      bundleId !== defaultBundleId
-        ? await db
-            .selectFrom('gate_policies as p')
-            .innerJoin('gate_policy_bundles as b', 'b.bundle_id', 'p.bundle_id')
-            .select([
-              'p.policy_id as policy_id',
-              'p.name as policy_name',
-              'p.feature_code as feature_code',
-              'p.kind as kind',
-              'p.unit as unit',
-              'p.window_sec as window_sec',
-              'p.limit_count as limit_count',
-              'p.limit_minor as limit_minor',
-              'p.status as status',
-              'p.metadata as policy_metadata',
-            ])
-            .where('p.realm_id', '=', realmId)
-            .where('p.bundle_id', '=', defaultBundleId)
-            .where('p.feature_code', '=', WILDCARD_FEATURE_CODE)
-            .where('p.kind', '<>', 'seats')
-            .where('p.status', '<>', 'disabled')
-            .where('b.status', '=', 'active')
-            .execute()
-        : []
-
-    if (policyRows.length === 0 && fallbackWildcardRows.length === 0) {
+    if (sources.length === 0) {
       return []
     }
 
-    const featureRows = await db
-      .selectFrom('features')
-      .select(['feature_code'])
-      .where('realm_id', '=', realmId)
-      .execute()
-
-    const features = new Set<string>(
-      featureRows
-        .map((row) => row.feature_code)
-        .filter((code): code is string => typeof code === 'string' && code.trim().length > 0),
+    const rowsBySource = await Promise.all(
+      sources.map(async (source) => {
+        const rows = await this.loadBundlePolicyRows(db, realmId, source.bundleId)
+        const allowed = new Set(source.allowedSubjectScopes)
+        return rows.filter((row) => allowed.has(this.normalizeSubjectScope(row.subject_scope)))
+      }),
     )
+
+    const policyRows = rowsBySource.flat()
+
+    if (policyRows.length === 0) {
+      return []
+    }
+
+    const features = new Set<string>(await this.loadFeatureCodes(db, realmId))
 
     for (const row of policyRows as PolicyStandaloneRow[]) {
       const feature = row.feature_code
@@ -182,14 +180,16 @@ export class QuotaService {
     for (const feature of features) {
       const specific = policiesByFeature.get(feature) ?? []
       const wildcardCurrentBundle = policiesByFeature.get(WILDCARD_FEATURE_CODE) ?? []
-      const wildcard = wildcardCurrentBundle.length > 0 ? wildcardCurrentBundle : fallbackWildcardRows
+      const wildcard = wildcardCurrentBundle
 
       const specificWindows = specific
-        .map((row) => this.buildWindowFromPolicy(row, now))
+        .map((row) => this.buildWindowFromPolicy(row, now, { billingAccountId, billingUserId }))
         .filter((window): window is PolicyWindowView => Boolean(window))
       const wildcardWindows = wildcard
         .map((row) =>
           this.buildWindowFromPolicy(row, now, {
+            billingAccountId,
+            billingUserId,
             featureOverride: feature,
             counterKeySuffix: `|feature:${feature}`,
           }),
@@ -204,10 +204,228 @@ export class QuotaService {
     return windows
   }
 
+  private async resolveEffectiveGateBundleSources(
+    db: Kysely<Database>,
+    params: { realmId: string; billingAccountId: string; billingUserId: string; now: Date },
+  ): Promise<GateBundleSource[]> {
+    const ttlMs = gateRuntimeCacheTtlMs()
+    const cacheBucket = ttlMs > 0 ? Math.floor(params.now.getTime() / ttlMs) : 0
+    const cacheKey = [
+      'bundle-sources',
+      params.realmId,
+      params.billingAccountId,
+      params.billingUserId,
+      cacheBucket,
+    ].join(':')
+    if (ttlMs > 0) {
+      const cached = getCached(bundleSourceCache, cacheKey)
+      if (cached) return cloneBundleSources(cached)
+    }
+
+    const rows = await db
+      .selectFrom('billing_plan_assignments as bpa')
+      .innerJoin('billing_plans as bpl', 'bpl.plan_id', 'bpa.plan_id')
+      .select([
+        'bpa.assignment_id as assignment_id',
+        'bpa.assignment_scope as assignment_scope',
+        'bpa.window_end as window_end',
+        'bpl.priority as priority',
+        sql<Record<string, unknown>>`bpl.metadata`.as('plan_metadata'),
+      ])
+      .where('bpa.billing_account_id', '=', params.billingAccountId)
+      .where('bpa.status', '=', 'active')
+      .where((eb) =>
+        eb.and([
+          eb('bpa.window_start', '<=', params.now),
+          eb.or([eb('bpa.window_end', '>', params.now), eb('bpa.window_end', 'is', null)]),
+        ]),
+      )
+      .where((eb) =>
+        eb.or([
+          eb('bpa.assignment_scope', '=', 'account'),
+          eb.and([eb('bpa.assignment_scope', '=', 'user'), eb('bpa.billing_user_id', '=', params.billingUserId)]),
+        ]),
+      )
+      .where('bpl.realm_id', '=', params.realmId)
+      .where('bpl.active', '=', true)
+      .where('bpl.kind', 'in', ['base', 'addon'])
+      .execute()
+
+    const candidates: GateBundleCandidate[] = []
+    for (const row of rows) {
+      const planMetadata = (row.plan_metadata ?? {}) as Record<string, unknown>
+      const bundleKey = typeof planMetadata.gate_bundle_key === 'string' ? planMetadata.gate_bundle_key.trim() : ''
+      if (!bundleKey) continue
+      candidates.push({
+        bundleKey,
+        assignmentScope: row.assignment_scope === 'account' ? 'account' : 'user',
+        priority: Number(row.priority ?? 0),
+        assignmentId: String(row.assignment_id ?? ''),
+        windowEnd: (row.window_end as Date | null) ?? null,
+      })
+    }
+
+    const bestAccount = this.pickBestBundleCandidate(candidates.filter((candidate) => candidate.assignmentScope === 'account'))
+    const bestUser = this.pickBestBundleCandidate(candidates.filter((candidate) => candidate.assignmentScope === 'user'))
+    const selected = [bestAccount, bestUser].filter((candidate): candidate is GateBundleCandidate => Boolean(candidate))
+
+    if (selected.length === 0) {
+      const defaultBundle = await db
+        .selectFrom('gate_policy_bundles')
+        .select(['bundle_id'])
+        .where('realm_id', '=', params.realmId)
+        .where('bundle_key', '=', DEFAULT_BUNDLE_KEY)
+        .where('status', '=', 'active')
+        .executeTakeFirst()
+      if (!defaultBundle?.bundle_id) {
+        throw new HttpException({ code: 'SERVER.CONFIG', message: 'default bundle not configured for realm' }, 500)
+      }
+      const sources: GateBundleSource[] = [
+        {
+          bundleId: String(defaultBundle.bundle_id),
+          assignmentScope: 'default',
+          allowedSubjectScopes: ['account', 'user'],
+        },
+      ]
+      this.cacheBundleSources(cacheKey, sources, params.now, ttlMs, [])
+      return cloneBundleSources(sources)
+    }
+
+    const bundleKeys = Array.from(new Set(selected.map((candidate) => candidate.bundleKey)))
+    const bundleRows = await db
+      .selectFrom('gate_policy_bundles')
+      .select(['bundle_id', 'bundle_key'])
+      .where('realm_id', '=', params.realmId)
+      .where('status', '=', 'active')
+      .where('bundle_key', 'in', bundleKeys)
+      .execute()
+    const bundleIdByKey = new Map(bundleRows.map((row) => [String(row.bundle_key), String(row.bundle_id)]))
+
+    const sources: GateBundleSource[] = []
+    if (bestAccount) {
+      const bundleId = bundleIdByKey.get(bestAccount.bundleKey)
+      if (bundleId) {
+        sources.push({
+          bundleId,
+          assignmentScope: 'account',
+          allowedSubjectScopes: bestUser ? ['account'] : ['account', 'user'],
+        })
+      }
+    }
+    if (bestUser) {
+      const bundleId = bundleIdByKey.get(bestUser.bundleKey)
+      if (bundleId) {
+        sources.push({
+          bundleId,
+          assignmentScope: 'user',
+          allowedSubjectScopes: ['user'],
+        })
+      }
+    }
+
+    this.cacheBundleSources(cacheKey, sources, params.now, ttlMs, selected.map((candidate) => candidate.windowEnd))
+    return cloneBundleSources(sources)
+  }
+
+  private async loadBundlePolicyRows(db: Kysely<Database>, realmId: string, bundleId: string): Promise<PolicyStandaloneRow[]> {
+    const ttlMs = gateRuntimeCacheTtlMs()
+    const cacheKey = ['bundle-policies', realmId, bundleId].join(':')
+    if (ttlMs > 0) {
+      const cached = getCached(bundlePolicyCache, cacheKey)
+      if (cached) return cached
+    }
+
+    const rows = await db
+      .selectFrom('gate_policies as p')
+      .innerJoin('gate_policy_bundles as b', 'b.bundle_id', 'p.bundle_id')
+      .select([
+        'p.policy_id as policy_id',
+        'p.name as policy_name',
+        'p.feature_code as feature_code',
+        'p.kind as kind',
+        'p.subject_scope as subject_scope',
+        'p.unit as unit',
+        'p.window_sec as window_sec',
+        'p.limit_count as limit_count',
+        'p.limit_minor as limit_minor',
+        'p.status as status',
+        'p.metadata as policy_metadata',
+      ])
+      .where('p.realm_id', '=', realmId)
+      .where('p.bundle_id', '=', bundleId)
+      .where('p.status', '<>', 'disabled')
+      .where('b.status', '=', 'active')
+      .execute()
+
+    if (ttlMs > 0) {
+      setCached(bundlePolicyCache, cacheKey, rows as PolicyStandaloneRow[], Date.now() + ttlMs)
+    }
+    return rows as PolicyStandaloneRow[]
+  }
+
+  private async loadFeatureCodes(db: Kysely<Database>, realmId: string): Promise<string[]> {
+    const ttlMs = gateRuntimeCacheTtlMs()
+    const cacheKey = ['feature-codes', realmId].join(':')
+    if (ttlMs > 0) {
+      const cached = getCached(featureCodeCache, cacheKey)
+      if (cached) return cached
+    }
+
+    const rows = await db
+      .selectFrom('features')
+      .select(['feature_code'])
+      .where('realm_id', '=', realmId)
+      .execute()
+    const codes = rows
+      .map((row) => row.feature_code)
+      .filter((code): code is string => typeof code === 'string' && code.trim().length > 0)
+
+    if (ttlMs > 0) {
+      setCached(featureCodeCache, cacheKey, codes, Date.now() + ttlMs)
+    }
+    return codes
+  }
+
+  private cacheBundleSources(
+    cacheKey: string,
+    sources: GateBundleSource[],
+    now: Date,
+    ttlMs: number,
+    assignmentBoundaries: Array<Date | null>,
+  ): void {
+    if (ttlMs <= 0) return
+    let expiresAtMs = Date.now() + ttlMs
+    const nowMs = now.getTime()
+    for (const boundary of assignmentBoundaries) {
+      if (!boundary) continue
+      const boundaryMs = boundary.getTime()
+      if (Number.isFinite(boundaryMs) && boundaryMs > nowMs) {
+        expiresAtMs = Math.min(expiresAtMs, boundaryMs)
+      }
+    }
+    setCached(bundleSourceCache, cacheKey, cloneBundleSources(sources), expiresAtMs)
+  }
+
+  private pickBestBundleCandidate(candidates: GateBundleCandidate[]): GateBundleCandidate | null {
+    if (candidates.length === 0) return null
+    return candidates
+      .slice()
+      .sort((a, b) => {
+        const priorityDiff = b.priority - a.priority
+        if (priorityDiff !== 0) return priorityDiff
+        return b.assignmentId.localeCompare(a.assignmentId)
+      })[0]
+  }
+
+  private normalizeSubjectScope(value: unknown): 'account' | 'user' {
+    return value === 'account' ? 'account' : 'user'
+  }
+
   async loadCounterLookup(
     db: Kysely<Database>,
     realmId: string,
     billingAccountId: string,
+    billingUserId: string,
     windows: PolicyWindowView[],
   ): Promise<CounterLookup> {
     const lookup: CounterLookup = new Map()
@@ -220,6 +438,8 @@ export class QuotaService {
       .innerJoin('billing_accounts as ba', 'ba.billing_account_id', 'qc.billing_account_id')
       .select([
         'qc.feature_code as feature_code',
+        'qc.subject_scope as subject_scope',
+        'qc.subject_id as subject_id',
         'qc.key as key',
         'qc.window_start as window_start',
         'qc.window_end as window_end',
@@ -231,6 +451,8 @@ export class QuotaService {
         eb.or(
           windows.map((window) =>
             eb.and([
+              eb('qc.subject_scope', '=', window.subjectScope),
+              eb('qc.subject_id', '=', window.subjectId),
               eb('qc.feature_code', '=', window.featureCode),
               eb('qc.key', '=', window.counterKey),
               eb('qc.window_start', '=', window.windowStart),
@@ -243,7 +465,14 @@ export class QuotaService {
 
     for (const row of rows) {
       const used = parseMinor(row.used_minor) ?? 0
-      const key = this.makeCounterStorageKey(row.feature_code, row.key ?? '', row.window_start, row.window_end)
+      const key = this.makeCounterStorageKey(
+        row.subject_scope as 'account' | 'user',
+        String(row.subject_id),
+        row.feature_code,
+        row.key ?? '',
+        row.window_start,
+        row.window_end,
+      )
       lookup.set(key, used)
     }
 
@@ -254,6 +483,7 @@ export class QuotaService {
     trx: Kysely<Database>,
     params: {
       realmId: string
+      billingUserId: string
       billingAccountId: string
       window: PolicyWindowView
       quantityMinor: number
@@ -261,10 +491,14 @@ export class QuotaService {
   ): Promise<void> {
     const limitStr = params.window.limitMinor.toString()
     const counterKey = params.window.counterKey ?? `policy:${params.window.policyName}`
+    const billingUserId = params.window.subjectScope === 'user' ? params.billingUserId : null
 
     await trx
       .insertInto('gate_quota_counters')
       .values({
+        subject_scope: params.window.subjectScope,
+        subject_id: params.window.subjectId,
+        billing_user_id: billingUserId,
         billing_account_id: params.billingAccountId,
         feature_code: params.window.featureCode,
         key: counterKey,
@@ -275,7 +509,7 @@ export class QuotaService {
       })
       .onConflict((oc) =>
         oc
-          .columns(['billing_account_id', 'feature_code', 'key', 'window_start', 'window_end'])
+          .columns(['billing_account_id', 'subject_scope', 'subject_id', 'feature_code', 'key', 'window_start', 'window_end'])
           .doUpdateSet({
             used_minor: sql`gate_quota_counters.used_minor + ${params.quantityMinor}`,
             limit_minor: limitStr,
@@ -287,7 +521,7 @@ export class QuotaService {
 
   async enforceRateWindows(
     trx: Kysely<Database>,
-    params: { billingAccountId: string; windows: PolicyWindowView[]; increment: number; now: Date },
+    params: { billingUserId: string; billingAccountId: string; windows: PolicyWindowView[]; increment: number; now: Date },
   ): Promise<{ hints: GateHint[] }> {
     const hints: GateHint[] = []
     if (params.increment <= 0 || params.windows.length === 0) {
@@ -303,6 +537,7 @@ export class QuotaService {
         throw new HttpException({ code: 'SERVER.CONFIG', message: 'rate window missing counter key' }, 500)
       }
       const result = await this.incrementRateCounter(trx, {
+        billingUserId: params.billingUserId,
         billingAccountId: params.billingAccountId,
         window,
         increment: params.increment,
@@ -344,6 +579,7 @@ export class QuotaService {
     params: {
       realmId: string
       billingAccountId: string
+      billingUserId: string
       featureCode: string
       now: Date
       feature: {
@@ -377,6 +613,12 @@ export class QuotaService {
         'bpl.kind as plan_kind',
       ])
       .where('bpa.billing_account_id', '=', params.billingAccountId)
+      .where((eb) =>
+        eb.or([
+          eb('bpa.assignment_scope', '=', 'account'),
+          eb.and([eb('bpa.assignment_scope', '=', 'user'), eb('bpa.billing_user_id', '=', params.billingUserId)]),
+        ]),
+      )
       .where('bpa.status', '=', 'active')
       .where((eb) =>
         eb.and([
@@ -423,6 +665,7 @@ export class QuotaService {
     params: {
       realmId: string
       billingAccountId: string
+      billingUserId: string
       at: Date
       featureCodes?: string[]
       featureFamilyCodes?: string[]
@@ -489,6 +732,12 @@ export class QuotaService {
         'bpl.kind as plan_kind',
       ])
       .where('bpa.billing_account_id', '=', params.billingAccountId)
+      .where((eb) =>
+        eb.or([
+          eb('bpa.assignment_scope', '=', 'account'),
+          eb.and([eb('bpa.assignment_scope', '=', 'user'), eb('bpa.billing_user_id', '=', params.billingUserId)]),
+        ]),
+      )
       .where('bpa.status', '=', 'active')
       .where((eb) =>
         eb.and([
@@ -654,6 +903,7 @@ export class QuotaService {
           ],
         },
       })
+      invalidateGateRuntimeCaches()
       rows = await trx
         .selectFrom('features as f')
         .leftJoin('feature_meters as fm', 'fm.feature_id', 'f.feature_id')
@@ -770,7 +1020,7 @@ export class QuotaService {
   private buildWindowFromPolicy(
     row: PolicyStandaloneRow,
     now: Date,
-    opts?: { featureOverride?: string; unitFallback?: string | null; counterKeySuffix?: string },
+    opts: { billingAccountId: string; billingUserId: string; featureOverride?: string; unitFallback?: string | null; counterKeySuffix?: string },
   ): PolicyWindowView | null {
     const policyMetadata = row.policy_metadata ?? null
     const { limit, windowMs, windowKind } = this.parsePolicyLimit(row)
@@ -783,6 +1033,8 @@ export class QuotaService {
     const baseCounterKey = this.resolveCounterKey(row, policyMetadata, null)
     const counterKey = opts?.counterKeySuffix ? `${baseCounterKey}${opts.counterKeySuffix}` : baseCounterKey
     const unit = row.unit ?? opts?.unitFallback ?? undefined
+    const subjectScope = this.normalizeSubjectScope(row.subject_scope)
+    const subjectId = subjectScope === 'account' ? opts.billingAccountId : opts.billingUserId
 
     const status: 'default' | 'ceiling' =
       row.status === 'ceiling' ? 'ceiling' : 'default'
@@ -790,6 +1042,8 @@ export class QuotaService {
     return {
       policyId: row.policy_id,
       policyName: row.policy_name ?? `policy-${row.policy_id}`,
+      subjectScope,
+      subjectId,
       featureCode,
       unit,
       limitMinor: limit,
@@ -892,7 +1146,7 @@ export class QuotaService {
 
   private async incrementRateCounter(
     trx: Kysely<Database>,
-    params: { billingAccountId: string; window: PolicyWindowView; increment: number; now: Date },
+    params: { billingUserId: string; billingAccountId: string; window: PolicyWindowView; increment: number; now: Date },
   ): Promise<RateCounterIncrementResult> {
     const limitMinor = params.window.limitMinor
     if (params.increment <= 0) {
@@ -906,9 +1160,13 @@ export class QuotaService {
     if (!counterKey) {
       throw new HttpException({ code: 'SERVER.CONFIG', message: 'rate window missing counter key' }, 500)
     }
+    const billingUserId = params.window.subjectScope === 'user' ? params.billingUserId : null
 
     const insertResult = await sql<RateCounterRow>`
       INSERT INTO gate_quota_counters (
+        subject_scope,
+        subject_id,
+        billing_user_id,
         billing_account_id,
         feature_code,
         key,
@@ -917,6 +1175,9 @@ export class QuotaService {
         limit_minor,
         used_minor
       ) VALUES (
+        ${params.window.subjectScope},
+        ${params.window.subjectId},
+        ${billingUserId},
         ${params.billingAccountId},
         ${params.window.featureCode},
         ${counterKey},
@@ -925,7 +1186,7 @@ export class QuotaService {
         ${limitMinor},
         ${params.increment}
       )
-      ON CONFLICT (billing_account_id, feature_code, key, window_start, window_end)
+      ON CONFLICT (billing_account_id, subject_scope, subject_id, feature_code, key, window_start, window_end)
       DO UPDATE SET
         used_minor = gate_quota_counters.used_minor + ${params.increment},
         limit_minor = ${limitMinor},
@@ -941,6 +1202,8 @@ export class QuotaService {
         .selectFrom('gate_quota_counters')
         .select('used_minor')
         .where('billing_account_id', '=', params.billingAccountId)
+        .where('subject_scope', '=', params.window.subjectScope)
+        .where('subject_id', '=', params.window.subjectId)
         .where('feature_code', '=', params.window.featureCode)
         .where('key', '=', counterKey)
         .where('window_start', '=', params.window.windowStart)
@@ -996,16 +1259,31 @@ export class QuotaService {
 
   getWindowUsage(window: PolicyWindowView, counters: CounterLookup): number {
     if (!window.counterKey) return 0
-    const key = this.makeCounterStorageKey(window.featureCode, window.counterKey, window.windowStart, window.windowEnd)
+    const key = this.makeCounterStorageKey(
+      window.subjectScope,
+      window.subjectId,
+      window.featureCode,
+      window.counterKey,
+      window.windowStart,
+      window.windowEnd,
+    )
     return counters.get(key) ?? 0
   }
 
-  makeCounterStorageKey(featureCode: string, counterKey: string, windowStart: Date, windowEnd: Date): string {
-    return `${featureCode}|${counterKey}|${windowStart.toISOString()}|${windowEnd.toISOString()}`
+  makeCounterStorageKey(
+    subjectScope: 'account' | 'user',
+    subjectId: string,
+    featureCode: string,
+    counterKey: string,
+    windowStart: Date,
+    windowEnd: Date,
+  ): string {
+    return `${subjectScope}|${subjectId}|${featureCode}|${counterKey}|${windowStart.toISOString()}|${windowEnd.toISOString()}`
   }
 
   buildQuotaWindow(window: PolicyWindowView, counters: CounterLookup): QuotaWindow {
     return {
+      subject_scope: window.subjectScope,
       window_start: window.windowStart.toISOString(),
       window_end: window.windowEnd.toISOString(),
       limit_minor: window.limitMinor.toString(),
@@ -1015,6 +1293,7 @@ export class QuotaService {
 
   buildRateWindow(window: PolicyWindowView, counters: CounterLookup): RateWindow {
     return {
+      subject_scope: window.subjectScope,
       window_start: window.windowStart.toISOString(),
       window_end: window.windowEnd.toISOString(),
       limit_minor: window.limitMinor.toString(),
@@ -1028,6 +1307,8 @@ export class QuotaService {
     }
     return {
       policy_id: window.policyId,
+      subject_scope: window.subjectScope,
+      subject_id: window.subjectId,
       counter_key: window.counterKey,
       window_start: window.windowStart.toISOString(),
       window_end: window.windowEnd.toISOString(),
@@ -1042,6 +1323,8 @@ export class QuotaService {
     }
     return {
       policy_id: window.policyId,
+      subject_scope: window.subjectScope,
+      subject_id: window.subjectId,
       counter_key: window.counterKey,
       window_start: window.windowStart.toISOString(),
       window_end: window.windowEnd.toISOString(),
@@ -1085,12 +1368,15 @@ export class QuotaService {
       if (!item || typeof item !== 'object') continue
       const obj = item as Record<string, unknown>
       const policyId = typeof obj.policy_id === 'string' ? obj.policy_id : String(obj.policy_id)
+      const subjectScope = this.normalizeSubjectScope(obj.subject_scope)
+      const subjectId = typeof obj.subject_id === 'string' ? obj.subject_id : undefined
       const counterKey = typeof obj.counter_key === 'string' ? obj.counter_key : undefined
       const windowStart = typeof obj.window_start === 'string' ? obj.window_start : undefined
       const windowEnd = typeof obj.window_end === 'string' ? obj.window_end : undefined
       const limitMinorRaw = typeof obj.limit_minor === 'number' ? obj.limit_minor : Number(obj.limit_minor)
       if (
         !policyId ||
+        !subjectId ||
         !counterKey ||
         !windowStart ||
         !windowEnd ||
@@ -1102,6 +1388,8 @@ export class QuotaService {
       const limitMinor = Math.trunc(limitMinorRaw)
       entries.push({
         policy_id: policyId,
+        subject_scope: subjectScope,
+        subject_id: subjectId,
         counter_key: counterKey,
         window_start: windowStart,
         window_end: windowEnd,
@@ -1113,11 +1401,13 @@ export class QuotaService {
   }
 
   matchQuotaWindow(entry: QuotaWindowMetadataEntry, windows: PolicyWindowView[]): PolicyWindowView | undefined {
-    const targetKey = this.makeQuotaMetadataKey(entry.policy_id, entry.counter_key, entry.window_start, entry.window_end)
+    const targetKey = this.makeQuotaMetadataKey(entry.policy_id, entry.subject_scope, entry.subject_id, entry.counter_key, entry.window_start, entry.window_end)
     return windows.find((window) => {
       if (!window.counterKey) return false
       const windowKey = this.makeQuotaMetadataKey(
         window.policyId,
+        window.subjectScope,
+        window.subjectId,
         window.counterKey,
         window.windowStart.toISOString(),
         window.windowEnd.toISOString(),
@@ -1126,8 +1416,8 @@ export class QuotaService {
     })
   }
 
-  makeQuotaMetadataKey(policyId: string, counterKey: string, windowStartIso: string, windowEndIso: string): string {
-    return `${policyId}|${counterKey}|${windowStartIso}|${windowEndIso}`
+  makeQuotaMetadataKey(policyId: string, subjectScope: 'account' | 'user', subjectId: string, counterKey: string, windowStartIso: string, windowEndIso: string): string {
+    return `${policyId}|${subjectScope}|${subjectId}|${counterKey}|${windowStartIso}|${windowEndIso}`
   }
 
 }

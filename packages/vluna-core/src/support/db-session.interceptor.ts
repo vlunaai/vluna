@@ -18,6 +18,7 @@ export class DbSessionInterceptor implements NestInterceptor {
             await setRlsSession(trx, {
               realmId: req?.ctx?.realmId,
               billingAccountId: req?.ctx?.billingAccountId,
+              billingUserId: req?.ctx?.billingUserId,
               isRealmAdmin: req?.ctx?.isRealmAdmin === true,
             })
           } catch {}
